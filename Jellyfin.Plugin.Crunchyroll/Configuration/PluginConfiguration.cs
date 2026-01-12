@@ -18,7 +18,25 @@ public class PluginConfiguration : BasePluginConfiguration
         EnableEpisodeOffsetMapping = true;
         CacheExpirationHours = 24;
         FlareSolverrUrl = string.Empty;
+        Username = string.Empty;
+        Password = string.Empty;
+        EnablePremiumCaching = false;
     }
+
+    /// <summary>
+    /// Gets or sets the username for login.
+    /// </summary>
+    public string Username { get; set; }
+
+    /// <summary>
+    /// Gets or sets the password for login.
+    /// </summary>
+    public string Password { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether to enable experimental premium caching features.
+    /// </summary>
+    public bool EnablePremiumCaching { get; set; }
 
     /// <summary>
     /// Gets or sets the preferred language for metadata.

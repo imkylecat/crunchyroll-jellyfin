@@ -27,6 +27,8 @@ public class CrunchyrollApiClient : IDisposable
     private readonly ILogger _logger;
     private readonly string _locale;
     private readonly FlareSolverrClient? _flareSolverrClient;
+    private readonly string _username;
+    private readonly string _password;
     private bool _disposed;
     private bool _useScrapingMode;
     
@@ -41,11 +43,15 @@ public class CrunchyrollApiClient : IDisposable
     /// <param name="logger">The logger instance.</param>
     /// <param name="locale">The locale for API requests.</param>
     /// <param name="flareSolverrUrl">Optional FlareSolverr URL for bypassing Cloudflare.</param>
-    public CrunchyrollApiClient(HttpClient httpClient, ILogger logger, string locale = "pt-BR", string? flareSolverrUrl = null)
+    /// <param name="username">Optional username/email for login.</param>
+    /// <param name="password">Optional password for login.</param>
+    public CrunchyrollApiClient(HttpClient httpClient, ILogger logger, string locale = "pt-BR", string? flareSolverrUrl = null, string? username = null, string? password = null)
     {
         _httpClient = httpClient;
         _logger = logger;
         _locale = locale;
+        _username = username ?? string.Empty;
+        _password = password ?? string.Empty;
 
         _httpClient.DefaultRequestHeaders.Clear();
         _httpClient.DefaultRequestHeaders.Add("User-Agent", UserAgent);
@@ -89,7 +95,7 @@ public class CrunchyrollApiClient : IDisposable
                 return true;
             }
 
-            return await TryAuthenticateAnonymousAsync(cancellationToken).ConfigureAwait(false);
+            return await TryAuthenticateAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -98,12 +104,13 @@ public class CrunchyrollApiClient : IDisposable
     }
 
     /// <summary>
-    /// Attempts anonymous authentication with Crunchyroll.
+    /// Attempts authentication with Crunchyroll (Anonymous or User).
     /// </summary>
     /// <returns>True if authentication succeeded, false if blocked by Cloudflare.</returns>
-    private async Task<bool> TryAuthenticateAnonymousAsync(CancellationToken cancellationToken)
+    private async Task<bool> TryAuthenticateAsync(CancellationToken cancellationToken)
     {
-        _logger.LogDebug("Authenticating with Crunchyroll (anonymous)");
+        bool isUserAuth = !string.IsNullOrEmpty(_username) && !string.IsNullOrEmpty(_password);
+        _logger.LogDebug("Authenticating with Crunchyroll ({Mode})", isUserAuth ? "User" : "Anonymous");
 
         try
         {
@@ -121,17 +128,32 @@ public class CrunchyrollApiClient : IDisposable
                 _logger.LogWarning(ex, "Failed to make initial Crunchyroll request");
             }
 
-            // Now perform the anonymous authentication
+            // Prepare authentication request
             using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/auth/v1/token");
             request.Headers.Accept.Clear();
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            
+            // Both flows use the same Basic Token and ETP header
             request.Headers.Authorization = new AuthenticationHeaderValue("Basic", AnonymousAuthToken);
             request.Headers.Add("ETP-Anonymous-ID", Guid.NewGuid().ToString());
             
-            request.Content = new FormUrlEncodedContent(new[]
+            if (isUserAuth)
             {
-                new KeyValuePair<string, string>("grant_type", "client_id")
-            });
+                request.Content = new FormUrlEncodedContent(new[]
+                {
+                    new KeyValuePair<string, string>("username", _username),
+                    new KeyValuePair<string, string>("password", _password),
+                    new KeyValuePair<string, string>("grant_type", "password"),
+                    new KeyValuePair<string, string>("scope", "offline_access") 
+                });
+            }
+            else
+            {
+                request.Content = new FormUrlEncodedContent(new[]
+                {
+                    new KeyValuePair<string, string>("grant_type", "client_id")
+                });
+            }
 
             var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
             
@@ -139,7 +161,6 @@ public class CrunchyrollApiClient : IDisposable
             {
                 var errorContent = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
                 
-                // Check if blocked by Cloudflare
                 // Check if blocked by Cloudflare (403 Forbidden is the standard indicator)
                 if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
                 {
@@ -172,7 +193,9 @@ public class CrunchyrollApiClient : IDisposable
             // Set expiration with 60 seconds buffer
             _tokenExpiration = DateTime.UtcNow.AddSeconds(authResponse.ExpiresIn - 60);
 
-            _logger.LogDebug("Successfully authenticated with Crunchyroll (country: {Country})", authResponse.Country);
+            _logger.LogInformation("Successfully authenticated with Crunchyroll as {Mode} (Country: {Country})", 
+                isUserAuth ? "User" : "Anonymous", authResponse.Country);
+            
             return true;
         }
         catch (Exception ex)

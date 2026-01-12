@@ -43,7 +43,9 @@ public class CrunchyrollSeasonProvider : IRemoteMetadataProvider<Season, SeasonI
 
         using var httpClient = _httpClientFactory.CreateClient();
         var flareSolverrUrl = config?.FlareSolverrUrl;
-        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl);
+        var username = config?.Username;
+        var password = config?.Password;
+        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password);
 
         // Check for existing Crunchyroll season ID
         string? crunchyrollSeasonId = info.GetProviderId("CrunchyrollSeason");
@@ -104,7 +106,9 @@ public class CrunchyrollSeasonProvider : IRemoteMetadataProvider<Season, SeasonI
 
         using var httpClient = _httpClientFactory.CreateClient();
         var flareSolverrUrl = config?.FlareSolverrUrl;
-        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl);
+        var username = config?.Username;
+        var password = config?.Password;
+        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password);
 
         var seasons = await apiClient.GetSeasonsAsync(seriesId, cancellationToken).ConfigureAwait(false);
 

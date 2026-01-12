@@ -127,6 +127,34 @@
                         </div>
                     </div>
 
+                    <div class="verticalSection">
+                        <h3 class="sectionTitle">Crunchyroll Account (Premium/Login)</h3>
+                        <p class="fieldDescription">Logging in with a real account (Premium or Free) can help bypass
+                            Cloudflare checks and access more metadata.</p>
+
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="txtUsername">Email / Username</label>
+                            <input id="txtUsername" type="text" is="emby-input" />
+                            <div class="fieldDescription">Your Crunchyroll login email.</div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="txtPassword">Password</label>
+                            <input id="txtPassword" type="password" is="emby-input" />
+                            <div class="fieldDescription">Your Crunchyroll password.</div>
+                        </div>
+
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label">
+                                <input id="chkEnablePremiumCaching" type="checkbox" is="emby-checkbox" />
+                                <span>Enable Premium Features (Future)</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Currently does nothing, but prepairs for future premium-only metadata fetches.
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="verticalSection" style="margin-top: 2em;">
                         <button is="emby-button" type="submit" class="raised button-submit block emby-button">
                             <span>Save</span>
@@ -151,12 +179,18 @@
                         document.querySelector('#chkEnableEpisodeOffsetMapping').checked = config.EnableEpisodeOffsetMapping !== false;
                         document.querySelector('#txtCacheExpiration').value = config.CacheExpirationHours || 24;
                         document.querySelector('#txtFlareSolverrUrl').value = config.FlareSolverrUrl || '';
+
+                        document.querySelector('#txtUsername').value = config.Username || '';
+                        document.querySelector('#txtPassword').value = config.Password || '';
+                        document.querySelector('#chkEnablePremiumCaching').checked = config.EnablePremiumCaching || false;
+
                         Dashboard.hideLoadingMsg();
                     });
                 });
 
             document.querySelector('#CrunchyrollConfigForm')
                 .addEventListener('submit', function (e) {
+                    e.preventDefault();
                     Dashboard.showLoadingMsg();
                     ApiClient.getPluginConfiguration(CrunchyrollConfigPage.pluginUniqueId).then(function (config) {
                         config.PreferredLanguage = document.querySelector('#selectPreferredLanguage').value;
@@ -166,11 +200,14 @@
                         config.CacheExpirationHours = parseInt(document.querySelector('#txtCacheExpiration').value) || 24;
                         config.FlareSolverrUrl = document.querySelector('#txtFlareSolverrUrl').value.trim();
 
+                        config.Username = document.querySelector('#txtUsername').value.trim();
+                        config.Password = document.querySelector('#txtPassword').value;
+                        config.EnablePremiumCaching = document.querySelector('#chkEnablePremiumCaching').checked;
+
                         ApiClient.updatePluginConfiguration(CrunchyrollConfigPage.pluginUniqueId, config).then(function (result) {
                             Dashboard.processPluginConfigurationUpdateResult(result);
                         });
                     });
-                    e.preventDefault();
                     return false;
                 });
         </script>
