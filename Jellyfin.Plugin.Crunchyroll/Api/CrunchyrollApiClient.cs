@@ -30,11 +30,15 @@ public class CrunchyrollApiClient : IDisposable
     private readonly string _username;
     private readonly string _password;
     private bool _disposed;
-    private bool _useScrapingMode;
+    private static bool _useScrapingMode;
     
-    private string? _accessToken;
-    private DateTime _tokenExpiration = DateTime.MinValue;
-    private readonly SemaphoreSlim _authLock = new(1, 1);
+    private static string? _accessToken;
+    private static DateTime _tokenExpiration = DateTime.MinValue;
+    private static readonly SemaphoreSlim _authLock = new(1, 1);
+    
+    // Rate limits to prevent flooding Cloudflare
+    private static DateTime _lastAuthAttempt = DateTime.MinValue;
+    private static readonly TimeSpan MinAuthInterval = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CrunchyrollApiClient"/> class.
@@ -109,6 +113,16 @@ public class CrunchyrollApiClient : IDisposable
     /// <returns>True if authentication succeeded, false if blocked by Cloudflare.</returns>
     private async Task<bool> TryAuthenticateAsync(CancellationToken cancellationToken)
     {
+        // Rate Limiting: Don't hammer the auth endpoint
+        if (DateTime.UtcNow - _lastAuthAttempt < MinAuthInterval)
+        {
+            _logger.LogWarning("Skipping authentication attempt (Too many attempts recently). Wait {Seconds}s.", 
+                (MinAuthInterval - (DateTime.UtcNow - _lastAuthAttempt)).TotalSeconds);
+            return false;
+        }
+
+        _lastAuthAttempt = DateTime.UtcNow;
+
         bool isUserAuth = !string.IsNullOrEmpty(_username) && !string.IsNullOrEmpty(_password);
         _logger.LogDebug("Authenticating with Crunchyroll ({Mode})", isUserAuth ? "User" : "Anonymous");
 
@@ -618,7 +632,8 @@ public class CrunchyrollApiClient : IDisposable
 
         if (disposing)
         {
-            _authLock.Dispose();
+            // Static lock should not be disposed here
+            // _authLock.Dispose();
             _httpClient.Dispose();
             _flareSolverrClient?.Dispose();
         }
