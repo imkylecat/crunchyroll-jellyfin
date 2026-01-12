@@ -1,3 +1,4 @@
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Web;
@@ -14,10 +15,19 @@ public class CrunchyrollApiClient : IDisposable
     private const string BaseUrl = "https://www.crunchyroll.com";
     private const string ApiBaseUrl = "https://www.crunchyroll.com/content/v2";
     
+    /// <summary>
+    /// Basic authentication token for anonymous access (base64 of "cr_web:").
+    /// </summary>
+    private const string AnonymousAuthToken = "Y3Jfd2ViOg==";
+    
     private readonly HttpClient _httpClient;
     private readonly ILogger _logger;
     private readonly string _locale;
     private bool _disposed;
+    
+    private string? _accessToken;
+    private DateTime _tokenExpiration = DateTime.MinValue;
+    private readonly SemaphoreSlim _authLock = new(1, 1);
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CrunchyrollApiClient"/> class.
@@ -33,8 +43,115 @@ public class CrunchyrollApiClient : IDisposable
 
         _httpClient.DefaultRequestHeaders.Clear();
         _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-        _httpClient.DefaultRequestHeaders.Add("Accept", "application/json");
+        _httpClient.DefaultRequestHeaders.Add("Accept", "application/json, text/plain, */*");
         _httpClient.DefaultRequestHeaders.Add("Accept-Language", locale);
+    }
+
+    /// <summary>
+    /// Ensures we have a valid access token, obtaining one if necessary.
+    /// </summary>
+    private async Task EnsureAuthenticatedAsync(CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrEmpty(_accessToken) && DateTime.UtcNow < _tokenExpiration)
+        {
+            return;
+        }
+
+        await _authLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            // Double-check after acquiring lock
+            if (!string.IsNullOrEmpty(_accessToken) && DateTime.UtcNow < _tokenExpiration)
+            {
+                return;
+            }
+
+            await AuthenticateAnonymousAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _authLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Performs anonymous authentication with Crunchyroll.
+    /// </summary>
+    private async Task AuthenticateAnonymousAsync(CancellationToken cancellationToken)
+    {
+        _logger.LogDebug("Authenticating with Crunchyroll (anonymous)");
+
+        // First, make an initial call to the Crunchyroll page to avoid bot detection
+        try
+        {
+            var initialResponse = await _httpClient.GetAsync(BaseUrl, cancellationToken).ConfigureAwait(false);
+            if (!initialResponse.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Initial Crunchyroll request returned {StatusCode}", initialResponse.StatusCode);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to make initial Crunchyroll request");
+        }
+
+        // Now perform the anonymous authentication
+        var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/auth/v1/token");
+        request.Headers.Accept.Clear();
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.Authorization = new AuthenticationHeaderValue("Basic", AnonymousAuthToken);
+        
+        request.Content = new FormUrlEncodedContent(new[]
+        {
+            new KeyValuePair<string, string>("grant_type", "client_id")
+        });
+
+        var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorContent = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            _logger.LogError("Crunchyroll authentication failed with status {StatusCode}: {Error}", 
+                response.StatusCode, errorContent);
+            throw new HttpRequestException($"Crunchyroll authentication failed: {response.StatusCode}");
+        }
+
+        var authResponse = await response.Content.ReadFromJsonAsync<CrunchyrollAuthResponse>(cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+
+        if (authResponse == null)
+        {
+            throw new InvalidOperationException("Failed to deserialize Crunchyroll auth response");
+        }
+
+        _accessToken = authResponse.AccessToken;
+        // Set expiration with 60 seconds buffer
+        _tokenExpiration = DateTime.UtcNow.AddSeconds(authResponse.ExpiresIn - 60);
+
+        _logger.LogDebug("Successfully authenticated with Crunchyroll (country: {Country})", authResponse.Country);
+    }
+
+    /// <summary>
+    /// Makes an authenticated GET request to the Crunchyroll API.
+    /// </summary>
+    private async Task<T?> GetAuthenticatedAsync<T>(string url, CancellationToken cancellationToken)
+    {
+        await EnsureAuthenticatedAsync(cancellationToken).ConfigureAwait(false);
+
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
+
+        var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorContent = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            _logger.LogError("Crunchyroll API request to {Url} failed with status {StatusCode}: {Error}", 
+                url, response.StatusCode, errorContent);
+            return default;
+        }
+
+        return await response.Content.ReadFromJsonAsync<T>(cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -53,7 +170,7 @@ public class CrunchyrollApiClient : IDisposable
             
             _logger.LogDebug("Searching Crunchyroll for: {Query}", query);
             
-            var response = await _httpClient.GetFromJsonAsync<CrunchyrollSearchResponse>(url, cancellationToken)
+            var response = await GetAuthenticatedAsync<CrunchyrollSearchResponse>(url, cancellationToken)
                 .ConfigureAwait(false);
 
             if (response?.Data == null || response.Data.Count == 0)
@@ -86,7 +203,7 @@ public class CrunchyrollApiClient : IDisposable
             
             _logger.LogDebug("Fetching series: {SeriesId}", seriesId);
             
-            var response = await _httpClient.GetFromJsonAsync<CrunchyrollResponse<CrunchyrollSeries>>(url, cancellationToken)
+            var response = await GetAuthenticatedAsync<CrunchyrollResponse<CrunchyrollSeries>>(url, cancellationToken)
                 .ConfigureAwait(false);
 
             return response?.Data?.FirstOrDefault();
@@ -112,7 +229,7 @@ public class CrunchyrollApiClient : IDisposable
             
             _logger.LogDebug("Fetching seasons for series: {SeriesId}", seriesId);
             
-            var response = await _httpClient.GetFromJsonAsync<CrunchyrollResponse<CrunchyrollSeason>>(url, cancellationToken)
+            var response = await GetAuthenticatedAsync<CrunchyrollResponse<CrunchyrollSeason>>(url, cancellationToken)
                 .ConfigureAwait(false);
 
             return response?.Data ?? new List<CrunchyrollSeason>();
@@ -138,7 +255,7 @@ public class CrunchyrollApiClient : IDisposable
             
             _logger.LogDebug("Fetching episodes for season: {SeasonId}", seasonId);
             
-            var response = await _httpClient.GetFromJsonAsync<CrunchyrollResponse<CrunchyrollEpisode>>(url, cancellationToken)
+            var response = await GetAuthenticatedAsync<CrunchyrollResponse<CrunchyrollEpisode>>(url, cancellationToken)
                 .ConfigureAwait(false);
 
             return response?.Data ?? new List<CrunchyrollEpisode>();
@@ -164,7 +281,7 @@ public class CrunchyrollApiClient : IDisposable
             
             _logger.LogDebug("Fetching episode: {EpisodeId}", episodeId);
             
-            var response = await _httpClient.GetFromJsonAsync<CrunchyrollResponse<CrunchyrollEpisode>>(url, cancellationToken)
+            var response = await GetAuthenticatedAsync<CrunchyrollResponse<CrunchyrollEpisode>>(url, cancellationToken)
                 .ConfigureAwait(false);
 
             return response?.Data?.FirstOrDefault();
@@ -217,6 +334,7 @@ public class CrunchyrollApiClient : IDisposable
 
         if (disposing)
         {
+            _authLock.Dispose();
             _httpClient.Dispose();
         }
 
