@@ -134,8 +134,9 @@ public class CrunchyrollApiClient : IDisposable
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             
             // Both flows use the same Basic Token and ETP header
+            var deviceId = Guid.NewGuid().ToString();
             request.Headers.Authorization = new AuthenticationHeaderValue("Basic", AnonymousAuthToken);
-            request.Headers.Add("ETP-Anonymous-ID", Guid.NewGuid().ToString());
+            request.Headers.Add("ETP-Anonymous-ID", deviceId);
             
             if (isUserAuth)
             {
@@ -144,14 +145,18 @@ public class CrunchyrollApiClient : IDisposable
                     new KeyValuePair<string, string>("username", _username),
                     new KeyValuePair<string, string>("password", _password),
                     new KeyValuePair<string, string>("grant_type", "password"),
-                    new KeyValuePair<string, string>("scope", "offline_access") 
+                    new KeyValuePair<string, string>("scope", "offline_access"),
+                    new KeyValuePair<string, string>("device_id", deviceId),
+                    new KeyValuePair<string, string>("device_type", "com.crunchyroll.android.google") // Matching our User-Agent
                 });
             }
             else
             {
                 request.Content = new FormUrlEncodedContent(new[]
                 {
-                    new KeyValuePair<string, string>("grant_type", "client_id")
+                    new KeyValuePair<string, string>("grant_type", "client_id"),
+                    new KeyValuePair<string, string>("device_id", deviceId),
+                    new KeyValuePair<string, string>("device_type", "com.crunchyroll.android.google")
                 });
             }
 
@@ -172,6 +177,14 @@ public class CrunchyrollApiClient : IDisposable
                         _logger.LogWarning("Cloudflare block detected but FlareSolverr URL is not configured. Please configure FlareSolverr URL in the plugin settings to enable fallback.");
                     }
                     
+                    return false;
+                }
+
+                if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized && errorContent.Contains("invalid_grant"))
+                {
+                    _logger.LogError("Crunchyroll Login Failed: Invalid Credentials. Please check your Email and Password in the plugin configuration.");
+                    // Fallback to anonymous if login fails?
+                    // For now, let's return false so user knows login failed.
                     return false;
                 }
                 
