@@ -1,7 +1,7 @@
 ---
 name: "Crunchyroll Metadata"
 guid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-version: "1.4.3.0"
+version: "1.4.3.1"
 targetAbi: "10.9.0.0"
 framework: "net8.0"
 overview: "Fetches anime metadata from Crunchyroll with intelligent season and episode mapping."
@@ -15,6 +15,12 @@ owner: "ocnaibill"
 artifacts:
 - "Jellyfin.Plugin.Crunchyroll.dll"
 changelog: >
+  1.4.3.1 - Scraping Diagnostics
+    - Detailed episode number/range logging in HTML scraper
+    - Cache miss logging shows available keys for debugging
+    - Warning about single-season scraping limitation
+    - Thread-safe lock on scraped episodes cache read
+
   1.4.3.0 - Critical Cache Fix
     - Static API response cache (seasons/episodes) shared across all instances
     - Static scraping cache shared across all requests
