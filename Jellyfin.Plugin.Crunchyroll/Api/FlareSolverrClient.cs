@@ -56,7 +56,7 @@ public class FlareSolverrClient : IDisposable
                 MaxTimeout = 60000
             };
 
-            _logger.LogDebug("Requesting URL through FlareSolverr: {Url}", url);
+            _logger.LogInformation("[FlareSolverr] Requesting URL: {Url}", url);
 
             var response = await _httpClient.PostAsJsonAsync(
                 $"{_flareSolverrUrl}/v1",
@@ -87,7 +87,19 @@ public class FlareSolverrClient : IDisposable
                 return null;
             }
 
-            _logger.LogDebug("FlareSolverr successfully fetched URL: {Url}", url);
+            var htmlLength = result.Solution?.Response?.Length ?? 0;
+            var solutionStatus = result.Solution?.Status ?? 0;
+            _logger.LogInformation("[FlareSolverr] SUCCESS - Status: {SolutionStatus}, HTML length: {Length} chars", solutionStatus, htmlLength);
+            
+            if (htmlLength == 0)
+            {
+                _logger.LogWarning("[FlareSolverr] Response HTML is empty!");
+            }
+            else if (htmlLength < 1000)
+            {
+                _logger.LogWarning("[FlareSolverr] Response HTML is very short ({Length} chars), might be an error page", htmlLength);
+            }
+            
             return result.Solution?.Response;
         }
         catch (Exception ex)

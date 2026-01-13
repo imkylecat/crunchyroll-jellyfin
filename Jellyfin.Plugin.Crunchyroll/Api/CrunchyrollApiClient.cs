@@ -505,13 +505,16 @@ public class CrunchyrollApiClient : IDisposable
                 var html = await GetPageViaFlareSolverrAsync(url, cancellationToken).ConfigureAwait(false);
                 if (string.IsNullOrEmpty(html))
                 {
+                    _logger.LogWarning("[Scraping] FlareSolverr returned empty HTML for series {SeriesId}", seriesId);
                     return new List<CrunchyrollSeason>();
                 }
+                
+                _logger.LogInformation("[Scraping] Got {Length} chars of HTML for series {SeriesId}", html.Length, seriesId);
 
                 // Reuse the HTML scraper to get episodes
                 var episodes = CrunchyrollHtmlScraper.ExtractEpisodesFromHtml(html, _logger);
                 
-                if (episodes.Count > 0)
+                if (episodes.Count \u003e 0)
                 {
                     // Organize into a single "Season" since scraping doesn't easily distinguish seasons yet
                     // We use the seriesId as the seasonId purely for internal mapping in this fallback mode
@@ -530,12 +533,16 @@ public class CrunchyrollApiClient : IDisposable
                     _scrapedEpisodesCache.Clear();
                     _scrapedEpisodesCache[scrapedSeasonId] = episodes;
 
-                    _logger.LogInformation("Scraped {Count} episodes and created fallback season", episodes.Count);
+                    _logger.LogInformation("[Scraping] Extracted {Count} episodes for series {SeriesId}", episodes.Count, seriesId);
                     return _scrapedSeasonsCache;
+                }
+                else
+                {
+                    _logger.LogWarning("[Scraping] No episodes extracted from HTML for series {SeriesId}. HTML might have different structure.", seriesId);
                 }
             }
 
-            _logger.LogDebug("No seasons found for series: {SeriesId}", seriesId);
+            _logger.LogWarning("[Scraping] No seasons found for series: {SeriesId}", seriesId);
             return new List<CrunchyrollSeason>();
         }
         catch (Exception ex)
