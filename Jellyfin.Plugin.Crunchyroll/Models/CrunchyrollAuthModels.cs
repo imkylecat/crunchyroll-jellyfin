@@ -36,4 +36,10 @@ public class CrunchyrollAuthResponse
     /// </summary>
     [JsonPropertyName("country")]
     public required string Country { get; init; }
+
+    /// <summary>
+    /// Gets or sets the refresh token for renewing access without re-login.
+    /// </summary>
+    [JsonPropertyName("refresh_token")]
+    public string? RefreshToken { get; init; }
 }

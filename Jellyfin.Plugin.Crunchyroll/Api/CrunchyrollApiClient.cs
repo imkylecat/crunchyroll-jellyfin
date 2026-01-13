@@ -16,12 +16,13 @@ public class CrunchyrollApiClient : IDisposable
     private const string ApiBaseUrl = "https://www.crunchyroll.com/content/v2";
     
     /// <summary>
-    /// Basic authentication token for anonymous access (matches Android TV client).
+    /// Basic authentication token (from crunchyroll-api Python project).
+    /// This token is used for OAuth2 authentication with Crunchyroll.
     /// </summary>
-    private const string AnonymousAuthToken = "bmR0aTZicXlqcm9wNXZnZjF0dnU6elpIcS00SEJJVDlDb2FMcnBPREJjRVRCTUNHai1QNlg=";
+    private const string BasicAuthToken = "bHF0ai11YmY1aHF4dGdvc2ZsYXQ6N2JIY3hfYnI0czJubWE1bVdrdHdKZEY0ZTU2UU5neFQ=";
     
-    // Using Android TV user agent from crunchyroll-rs to match the credentials
-    private const string UserAgent = "Crunchyroll/ANDROIDTV/3.50.0-22282 (Android 13.0; en-US; TCL-S5400AF Build/TP1A.220624.014)";
+    // Simplified User-Agent (matches Python implementation - less fingerprint surface)
+    private const string UserAgent = "Crunchyroll/3.50.2";
     
     private readonly HttpClient _httpClient;
     private readonly ILogger _logger;
@@ -33,6 +34,7 @@ public class CrunchyrollApiClient : IDisposable
     private static bool _useScrapingMode;
     
     private static string? _accessToken;
+    private static string? _refreshToken;  // For token renewal without re-login
     private static DateTime _tokenExpiration = DateTime.MinValue;
     private static readonly SemaphoreSlim _authLock = new(1, 1);
     
@@ -155,10 +157,27 @@ public class CrunchyrollApiClient : IDisposable
             
             // Both flows use the same Basic Token and ETP header
             var deviceId = Guid.NewGuid().ToString();
-            request.Headers.Authorization = new AuthenticationHeaderValue("Basic", AnonymousAuthToken);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Basic", BasicAuthToken);
             request.Headers.Add("ETP-Anonymous-ID", deviceId);
             
-            if (isUserAuth)
+            // Determine authentication mode:
+            // 1. If we have a refresh token, try to use it first
+            // 2. If user credentials provided, use password grant
+            // 3. Otherwise, use anonymous client_id grant
+            bool useRefreshToken = !string.IsNullOrEmpty(_refreshToken);
+            
+            if (useRefreshToken)
+            {
+                _logger.LogDebug("Attempting token refresh with existing refresh_token");
+                request.Content = new FormUrlEncodedContent(new[]
+                {
+                    new KeyValuePair<string, string>("refresh_token", _refreshToken!),
+                    new KeyValuePair<string, string>("grant_type", "refresh_token"),
+                    new KeyValuePair<string, string>("scope", "offline_access"),
+                    new KeyValuePair<string, string>("device_id", deviceId)
+                });
+            }
+            else if (isUserAuth)
             {
                 request.Content = new FormUrlEncodedContent(new[]
                 {
@@ -167,7 +186,7 @@ public class CrunchyrollApiClient : IDisposable
                     new KeyValuePair<string, string>("grant_type", "password"),
                     new KeyValuePair<string, string>("scope", "offline_access"),
                     new KeyValuePair<string, string>("device_id", deviceId),
-                    new KeyValuePair<string, string>("device_type", "com.crunchyroll.android.google") // Matching our User-Agent
+                    new KeyValuePair<string, string>("device_type", "com.crunchyroll.android.google")
                 });
             }
             else
@@ -185,6 +204,15 @@ public class CrunchyrollApiClient : IDisposable
             if (!response.IsSuccessStatusCode)
             {
                 var errorContent = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                
+                // If refresh token failed, clear it and try again with full login
+                if (useRefreshToken && (response.StatusCode == System.Net.HttpStatusCode.BadRequest || 
+                                        response.StatusCode == System.Net.HttpStatusCode.Unauthorized))
+                {
+                    _logger.LogWarning("Refresh token expired or invalid, clearing and retrying with full login");
+                    _refreshToken = null;
+                    return await TryAuthenticateAsync(cancellationToken).ConfigureAwait(false);
+                }
                 
                 // Check if blocked by Cloudflare (403 Forbidden is the standard indicator)
                 // Also handle 429 TooManyRequests which Cloudflare uses for rate limiting bans (Error 1015)
@@ -205,8 +233,6 @@ public class CrunchyrollApiClient : IDisposable
                 if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized && errorContent.Contains("invalid_grant"))
                 {
                     _logger.LogError("Crunchyroll Login Failed: Invalid Credentials. Please check your Email and Password in the plugin configuration.");
-                    // Fallback to anonymous if login fails?
-                    // For now, let's return false so user knows login failed.
                     return false;
                 }
                 
@@ -225,11 +251,16 @@ public class CrunchyrollApiClient : IDisposable
             }
 
             _accessToken = authResponse.AccessToken;
+            // Save refresh token if provided
+            if (!string.IsNullOrEmpty(authResponse.RefreshToken))
+            {
+                _refreshToken = authResponse.RefreshToken;
+            }
             // Set expiration with 60 seconds buffer
             _tokenExpiration = DateTime.UtcNow.AddSeconds(authResponse.ExpiresIn - 60);
 
             _logger.LogInformation("Successfully authenticated with Crunchyroll as {Mode} (Country: {Country})", 
-                isUserAuth ? "User" : "Anonymous", authResponse.Country);
+                useRefreshToken ? "Refresh" : (isUserAuth ? "User" : "Anonymous"), authResponse.Country);
             
             return true;
         }
