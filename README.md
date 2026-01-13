@@ -41,7 +41,7 @@ A forma mais fácil de instalar o plugin é através do repositório de plugins 
    - Clique em `+` para adicionar um novo repositório
    - Cole a URL do manifesto:
      ```
-     https://raw.githubusercontent.com/bianco/crunchyroll-jellyfin/main/manifest.json
+     https://raw.githubusercontent.com/ocnaibill/crunchyroll-jellyfin/main/manifest.json
      ```
    - Clique em `Save`
 
@@ -71,7 +71,7 @@ A forma mais fácil de instalar o plugin é através do repositório de plugins 
 ### Método 2: Instalação Manual
 
 1. **Baixe o plugin**
-   - Vá para a página de [Releases](https://github.com/bianco/crunchyroll-jellyfin/releases)
+   - Vá para a página de [Releases](https://github.com/ocnaibill/crunchyroll-jellyfin/releases)
    - Baixe o arquivo `Jellyfin.Plugin.Crunchyroll.zip`
 
 2. **Extraia e copie os arquivos para o diretório de plugins**
@@ -95,7 +95,7 @@ A forma mais fácil de instalar o plugin é através do repositório de plugins 
 
 1. **Clone o repositório**
    ```bash
-   git clone https://github.com/bianco/crunchyroll-jellyfin.git
+   git clone https://github.com/ocnaibill/crunchyroll-jellyfin.git
    cd crunchyroll-jellyfin
    ```
 
