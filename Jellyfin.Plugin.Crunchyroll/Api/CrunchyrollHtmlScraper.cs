@@ -109,6 +109,83 @@ public static partial class CrunchyrollHtmlScraper
     }
 
     /// <summary>
+    /// Extracts available season IDs and titles from the series page HTML.
+    /// Crunchyroll pages often have a season selector that contains links to each season.
+    /// </summary>
+    /// <param name="html">The HTML content of the series page.</param>
+    /// <param name="logger">Logger for debugging.</param>
+    /// <returns>List of tuples (SeasonId, SeasonTitle, Index) for each season found.</returns>
+    public static List<(string SeasonId, string Title, int Index)> ExtractAvailableSeasonsFromHtml(string html, ILogger logger)
+    {
+        var seasons = new List<(string SeasonId, string Title, int Index)>();
+        
+        try
+        {
+            // Look for season selector in the HTML
+            // Crunchyroll typically has a dropdown or tabs with season info
+            // Pattern 1: Season selector dropdown options
+            var seasonMatches = Regex.Matches(html, @"season[_-]?id["":\s]+[""']?([A-Z0-9]{9,})[""']?", RegexOptions.IgnoreCase);
+            
+            foreach (Match match in seasonMatches)
+            {
+                var seasonId = match.Groups[1].Value;
+                if (!seasons.Any(s => s.SeasonId == seasonId))
+                {
+                    seasons.Add((seasonId, $"Season {seasons.Count + 1}", seasons.Count));
+                }
+            }
+            
+            // Pattern 2: Look for season navigation links
+            var seasonLinkMatches = Regex.Matches(html, @"href=""[^""]*?/series/[A-Z0-9]+\?season=([A-Z0-9]{9,})""", RegexOptions.IgnoreCase);
+            
+            foreach (Match match in seasonLinkMatches)
+            {
+                var seasonId = match.Groups[1].Value;
+                if (!seasons.Any(s => s.SeasonId == seasonId))
+                {
+                    seasons.Add((seasonId, $"Season {seasons.Count + 1}", seasons.Count));
+                }
+            }
+            
+            // Pattern 3: Look in __INITIAL_STATE__ or __NEXT_DATA__ for season info
+            var jsonMatch = Regex.Match(html, @"(?:__INITIAL_STATE__|__NEXT_DATA__)\s*=\s*({.+?})(?:;\s*</script>|$)", RegexOptions.Singleline);
+            if (jsonMatch.Success)
+            {
+                var json = jsonMatch.Groups[1].Value;
+                
+                // Find season objects with IDs
+                var seasonDataMatches = Regex.Matches(json, @"""([A-Z0-9]{9,})"":\s*\{[^}]*""type""\s*:\s*""season""[^}]*\}", RegexOptions.IgnoreCase);
+                
+                foreach (Match sdMatch in seasonDataMatches)
+                {
+                    var seasonId = sdMatch.Groups[1].Value;
+                    if (!seasons.Any(s => s.SeasonId == seasonId))
+                    {
+                        // Try to extract season title/number from the block
+                        var block = sdMatch.Value;
+                        var titleMatch = Regex.Match(block, @"""title""\s*:\s*""([^""]+)""");
+                        var seasonTitle = titleMatch.Success ? titleMatch.Groups[1].Value : $"Season {seasons.Count + 1}";
+                        
+                        seasons.Add((seasonId, seasonTitle, seasons.Count));
+                    }
+                }
+            }
+            
+            logger.LogInformation("[SeasonExtract] Found {Count} seasons in HTML", seasons.Count);
+            foreach (var season in seasons)
+            {
+                logger.LogDebug("[SeasonExtract] Season {Index}: {Id} - {Title}", season.Index + 1, season.SeasonId, season.Title);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[SeasonExtract] Failed to extract seasons from HTML");
+        }
+        
+        return seasons;
+    }
+
+    /// <summary>
     /// Extracts episode information from a Crunchyroll series page HTML.
     /// </summary>
     /// <param name="html">The HTML content of the series page.</param>
@@ -529,6 +606,8 @@ public static partial class CrunchyrollHtmlScraper
             // Find all /watch/ID links
             var watchMatches = Regex.Matches(html, @"href=""[^""]*?/watch/([A-Z0-9]{9,})(?:/([^""]+))?""[^>]*>", RegexOptions.IgnoreCase);
             
+            logger.LogInformation("[WatchLinks] Found {Count} total watch links, processing...", watchMatches.Count);
+            
             foreach (Match match in watchMatches)
             {
                 var episodeId = match.Groups[1].Value;
@@ -543,33 +622,135 @@ public static partial class CrunchyrollHtmlScraper
                     Id = episodeId
                 };
                 
-                // Try to extract slug title
+                // Try to extract slug title and episode number from it
                 if (match.Groups[2].Success)
                 {
                     var slug = match.Groups[2].Value;
-                    // Convert slug to title (replace hyphens with spaces, capitalize)
-                    episode.Title = HttpUtility.UrlDecode(slug)
+                    
+                    // Try multiple patterns to extract episode number from slug
+                    // Common patterns:
+                    // - "e1-title-here" or "e01-title-here"
+                    // - "episode-1-title-here"
+                    // - "1-title-here" (just number at start)
+                    // - "title-here-1" (number at end, less common)
+                    // - "s1e1-title" or "s01e01-title"
+                    
+                    string? extractedNumber = null;
+                    string cleanTitle = slug;
+                    
+                    // Pattern 1: e1, e01, e001 at start
+                    var eNumMatch = Regex.Match(slug, @"^e(\d+)-(.+)$", RegexOptions.IgnoreCase);
+                    if (eNumMatch.Success)
+                    {
+                        extractedNumber = eNumMatch.Groups[1].Value.TrimStart('0');
+                        if (string.IsNullOrEmpty(extractedNumber)) extractedNumber = "0";
+                        cleanTitle = eNumMatch.Groups[2].Value;
+                    }
+                    
+                    // Pattern 2: episode-1 at start
+                    if (extractedNumber == null)
+                    {
+                        var epMatch = Regex.Match(slug, @"^episode-?(\d+)-(.+)$", RegexOptions.IgnoreCase);
+                        if (epMatch.Success)
+                        {
+                            extractedNumber = epMatch.Groups[1].Value.TrimStart('0');
+                            if (string.IsNullOrEmpty(extractedNumber)) extractedNumber = "0";
+                            cleanTitle = epMatch.Groups[2].Value;
+                        }
+                    }
+                    
+                    // Pattern 3: s1e1 or s01e01 at start
+                    if (extractedNumber == null)
+                    {
+                        var seMatch = Regex.Match(slug, @"^s\d+e(\d+)-(.+)$", RegexOptions.IgnoreCase);
+                        if (seMatch.Success)
+                        {
+                            extractedNumber = seMatch.Groups[1].Value.TrimStart('0');
+                            if (string.IsNullOrEmpty(extractedNumber)) extractedNumber = "0";
+                            cleanTitle = seMatch.Groups[2].Value;
+                        }
+                    }
+                    
+                    // Pattern 4: Just number at start (1-title)
+                    if (extractedNumber == null)
+                    {
+                        var numMatch = Regex.Match(slug, @"^(\d+)-(.+)$");
+                        if (numMatch.Success)
+                        {
+                            extractedNumber = numMatch.Groups[1].Value.TrimStart('0');
+                            if (string.IsNullOrEmpty(extractedNumber)) extractedNumber = "0";
+                            cleanTitle = numMatch.Groups[2].Value;
+                        }
+                    }
+                    
+                    // Set episode number if found
+                    if (!string.IsNullOrEmpty(extractedNumber))
+                    {
+                        episode.EpisodeNumber = extractedNumber;
+                        if (int.TryParse(extractedNumber, out int epNum))
+                        {
+                            episode.EpisodeNumberInt = epNum;
+                            episode.SequenceNumber = epNum;
+                        }
+                        logger.LogDebug("[WatchLinks] Extracted E{Num} from slug: {Slug}", extractedNumber, slug);
+                    }
+                    
+                    // Convert slug to readable title
+                    episode.Title = HttpUtility.UrlDecode(cleanTitle)
                         .Replace("-", " ")
                         .Trim();
                 }
                 
-                // Try to find episode number from surrounding context
-                var contextStart = Math.Max(0, match.Index - 100);
-                var contextEnd = Math.Min(html.Length, match.Index + match.Length + 200);
-                var context = html.Substring(contextStart, contextEnd - contextStart);
-                
-                var epNumMatch = Regex.Match(context, @"(?:E|Episode|Episodio|Episódio)\s*(\d+)", RegexOptions.IgnoreCase);
-                if (epNumMatch.Success)
+                // If still no episode number, try context around the link
+                if (string.IsNullOrEmpty(episode.EpisodeNumber))
                 {
-                    episode.EpisodeNumber = epNumMatch.Groups[1].Value;
-                    if (int.TryParse(episode.EpisodeNumber, out int epNum))
+                    var contextStart = Math.Max(0, match.Index - 150);
+                    var contextEnd = Math.Min(html.Length, match.Index + match.Length + 300);
+                    var context = html.Substring(contextStart, contextEnd - contextStart);
+                    
+                    // Try various patterns in context
+                    var patterns = new[]
                     {
-                        episode.EpisodeNumberInt = epNum;
-                        episode.SequenceNumber = epNum;
+                        @"(?:E|Ep|Episode|Episódio|Episodio)\s*[:\s]?\s*(\d+)",
+                        @">\s*(\d+)\s*<",  // Number between tags
+                        @"episode[_-]?number["":\s]+(\d+)",  // JSON-like
+                    };
+                    
+                    foreach (var pattern in patterns)
+                    {
+                        var epNumMatch = Regex.Match(context, pattern, RegexOptions.IgnoreCase);
+                        if (epNumMatch.Success)
+                        {
+                            episode.EpisodeNumber = epNumMatch.Groups[1].Value;
+                            if (int.TryParse(episode.EpisodeNumber, out int epNum))
+                            {
+                                episode.EpisodeNumberInt = epNum;
+                                episode.SequenceNumber = epNum;
+                            }
+                            logger.LogDebug("[WatchLinks] Found E{Num} in context for {Id}", episode.EpisodeNumber, episodeId);
+                            break;
+                        }
                     }
                 }
                 
                 episodes.Add(episode);
+            }
+            
+            // Sort episodes by episode number if available
+            episodes = episodes
+                .OrderBy(e => e.EpisodeNumberInt ?? 9999)
+                .ToList();
+            
+            // If no episode numbers were found but we have episodes, assign sequential numbers
+            if (episodes.Any() && episodes.All(e => string.IsNullOrEmpty(e.EpisodeNumber)))
+            {
+                logger.LogWarning("[WatchLinks] No episode numbers found, assigning sequential numbers...");
+                for (int i = 0; i < episodes.Count; i++)
+                {
+                    episodes[i].EpisodeNumber = (i + 1).ToString();
+                    episodes[i].EpisodeNumberInt = i + 1;
+                    episodes[i].SequenceNumber = i + 1;
+                }
             }
             
             logger.LogInformation("[WatchLinks] Found {Count} unique episode links", episodes.Count);
