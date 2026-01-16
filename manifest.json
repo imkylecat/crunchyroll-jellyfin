@@ -9,8 +9,8 @@
     "versions": [
       {
         "version": "1.4.10.0",
-        "checksum": "34c37d9440fceae6a3a86d13ddca1e1d",
-        "timestamp": "2026-01-16T00:16:39Z",
+        "checksum": "14931c6a6516704394486589d5276260",
+        "timestamp": "2026-01-16T00:21:14Z",
         "sourceUrl": "https://github.com/ocnaibill/crunchyroll-jellyfin/releases/download/v1.4.10/Jellyfin.Plugin.Crunchyroll.zip"
       }
     ]
