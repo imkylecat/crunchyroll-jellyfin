@@ -4,228 +4,240 @@
   <img src="https://raw.githubusercontent.com/jellyfin/jellyfin-ux/master/branding/SVG/icon-transparent.svg" alt="Jellyfin Logo" width="100">
 </p>
 
-Um plugin para o Jellyfin que busca metadados de animes diretamente da Crunchyroll, com suporte inteligente para mapeamento de temporadas e episódios.
+A Jellyfin metadata plugin that fetches anime metadata directly from Crunchyroll, with intelligent season and episode mapping designed to match how most users organize their libraries.
 
-## ✨ Recursos
+🔗 **Leia em Português (Brasil): [README.pt-BR.md](README.pt-BR.md)**
 
-- **Metadados de Séries**: Título, descrição, ano de lançamento, gêneros e classificação etária
-- **Metadados de Temporadas**: Títulos e descrições das temporadas
-- **Metadados de Episódios**: Título, descrição, duração e data de exibição
-- **Imagens**: Posters, backdrops e thumbnails de episódios
-- **Suporte Multi-idioma**: Português (Brasil), Inglês, Japonês e mais
+---
 
-### 🎯 Resolução de Problemas Comuns
+## ✨ Features
 
-#### Problema 1: Temporadas Separadas (AniDB)
-Outros plugins como o AniDB tratam cada temporada como uma obra separada. Este plugin resolve isso ao:
-- Mapear automaticamente temporadas do Jellyfin para temporadas da Crunchyroll
-- Manter todas as temporadas organizadas sob uma única série
+- **Series Metadata**: Title, overview, release year, genres, and age rating
+- **Season Metadata**: Season titles and descriptions
+- **Episode Metadata**: Title, overview, runtime, and air date
+- **Images**: Posters, backdrops, and episode thumbnails
+- **Multi-language Support**: English, Portuguese (Brazil), Japanese, and more
 
-#### Problema 2: Numeração de Episódios
-A Crunchyroll às vezes usa numeração contínua de episódios entre temporadas. Por exemplo:
-- **Jujutsu Kaisen**: A temporada 2 começa no episódio 25 na Crunchyroll
-- **No seu servidor**: Você organiza como Temporada 2, Episódio 1
+---
 
-Este plugin resolve isso através do **cálculo automático de offset**, garantindo que:
-- `S02E01` no seu servidor → `Episódio 25` na Crunchyroll ✓
-- `S02E02` no seu servidor → `Episódio 26` na Crunchyroll ✓
+## 🎯 Problems This Plugin Solves
 
-## 📦 Instalação
+### Split Seasons (AniDB-style behavior)
 
-### Método 1: Instalação via Repositório (Recomendado) ⭐
+Some metadata providers treat each season as a separate series. This plugin avoids that by:
 
-A forma mais fácil de instalar o plugin é através do repositório de plugins do Jellyfin:
+- Automatically mapping Jellyfin seasons to Crunchyroll seasons
+- Keeping all seasons grouped under a single series entry
 
-1. **Adicione o repositório**
-   - Acesse o painel do Jellyfin: `Dashboard > Plugins > Repositories`
-   - Clique em `+` para adicionar um novo repositório
-   - Cole a URL do manifesto:
-     ```
-     https://raw.githubusercontent.com/ocnaibill/crunchyroll-jellyfin/main/manifest.json
-     ```
-   - Clique em `Save`
+---
 
-2. **Instale o plugin**
-   - Vá para `Dashboard > Plugins > Catalog`
-   - Procure por "Crunchyroll Metadata"
-   - Clique em `Install`
+### Continuous Episode Numbering
 
-3. **Reinicie o Jellyfin**
-   ```bash
-   # Linux (systemd)
-   sudo systemctl restart jellyfin
-   
-   # Docker
-   docker restart jellyfin
-   ```
+Crunchyroll sometimes uses continuous episode numbering across seasons.
 
-4. **Configure o plugin**
-   - Vá para `Dashboard > Plugins > My Plugins > Crunchyroll Metadata`
-   - Configure o idioma e opções de mapeamento
-   - Salve as configurações
+Example:
 
-5. **Execute um scan da biblioteca**
-   - Vá para a sua biblioteca de animes
-   - Clique em `Scan Library`
+- **Jujutsu Kaisen**: Season 2 starts at episode 25 on Crunchyroll
+- **Typical Jellyfin library**: Season 2 starts at episode 1
 
-### Método 2: Instalação Manual
+This plugin uses **automatic episode offset calculation**, ensuring:
 
-1. **Baixe o plugin**
-   - Vá para a página de [Releases](https://github.com/ocnaibill/crunchyroll-jellyfin/releases)
-   - Baixe o arquivo `Jellyfin.Plugin.Crunchyroll.zip`
+- `S02E01` in Jellyfin → Crunchyroll Episode 25 ✅
+- `S02E02` in Jellyfin → Crunchyroll Episode 26 ✅
 
-2. **Extraia e copie os arquivos para o diretório de plugins**
-   
-   | Sistema Operacional | Caminho |
-   |---------------------|---------|
-   | Linux | `/var/lib/jellyfin/plugins/Crunchyroll/` |
-   | Windows | `C:\ProgramData\Jellyfin\Server\plugins\Crunchyroll\` |
-   | macOS | `~/.local/share/jellyfin/plugins/Crunchyroll/` |
-   | Docker | `/config/plugins/Crunchyroll/` |
+---
 
-   > **Nota**: Crie a pasta `Crunchyroll` se ela não existir.
+## 📦 Installation
 
-3. **Reinicie o Jellyfin**
+### Method 1: Plugin Repository (Recommended)
 
-4. **Verifique a instalação**
-   - Vá para `Dashboard > Plugins`
-   - O plugin "Crunchyroll Metadata" deve aparecer na lista
-
-### Método 3: Compilando do Código Fonte
-
-1. **Clone o repositório**
-   ```bash
-   git clone https://github.com/ocnaibill/crunchyroll-jellyfin.git
-   cd crunchyroll-jellyfin
-   ```
-
-2. **Compile o plugin**
-   ```bash
-   dotnet build -c Release
-   ```
-
-3. **Copie a DLL gerada**
-   ```bash
-   # O arquivo estará em:
-   # Jellyfin.Plugin.Crunchyroll/bin/Release/net8.0/Jellyfin.Plugin.Crunchyroll.dll
-   ```
-
-4. Siga os passos 2-4 do Método 2
-
-## ⚙️ Configuração
-
-Após instalar o plugin, configure-o em `Dashboard > Plugins > Crunchyroll Metadata`:
-
-### Idioma
-- **Idioma Preferido**: Selecione o idioma para os metadados (padrão: Português Brasil)
-- **Idioma de Fallback**: Idioma alternativo quando o preferido não está disponível
-
-### Mapeamento de Temporadas e Episódios
-- **Habilitar Mapeamento de Temporadas**: Mapeia automaticamente temporadas do Jellyfin para a Crunchyroll
-- **Habilitar Mapeamento de Offset de Episódios**: Calcula automaticamente o offset quando a Crunchyroll usa numeração contínua
-
-### Cache
-- **Expiração do Cache**: Tempo em horas para manter os metadados em cache (padrão: 24h)
-
-## 🔧 Uso
-
-### Configurando uma Biblioteca de Animes
-
-1. **Crie ou edite uma biblioteca de séries de TV**
-   - Vá para `Dashboard > Libraries > Add Media Library`
-   - Tipo: `Shows`
-   - Nome: `Animes` (ou como preferir)
-
-2. **Habilite o provedor Crunchyroll**
-   - Na configuração da biblioteca, vá para `Metadata Downloaders`
-   - Habilite `Crunchyroll` para Séries, Temporadas e Episódios
-   - Arraste `Crunchyroll` para a posição desejada na ordem de prioridade
-   
-3. **Habilite o provedor de imagens**
-   - Em `Image Fetchers`, habilite `Crunchyroll`
-
-### Organização de Arquivos Recomendada
+1. Open the Jellyfin Dashboard
+2. Go to `Dashboard > Plugins > Repositories`
+3. Click `+` and add the following manifest URL:
 
 ```
+https://raw.githubusercontent.com/ocnaibill/crunchyroll-jellyfin/main/manifest.json
+```
+
+4. Save and go to `Dashboard > Plugins > Catalog`
+5. Search for **Crunchyroll Metadata** and click **Install**
+6. Restart Jellyfin
+
+```bash
+# Linux (systemd)
+sudo systemctl restart jellyfin
+
+# Docker
+docker restart jellyfin
+```
+
+---
+
+### Method 2: Manual Installation
+
+1. Download `Jellyfin.Plugin.Crunchyroll.zip` from the Releases page
+2. Extract the files to the appropriate plugins directory:
+
+| OS | Path |
+|----|------|
+| Linux | `/var/lib/jellyfin/plugins/Crunchyroll/` |
+| Windows | `C:\ProgramData\Jellyfin\Server\plugins\Crunchyroll\` |
+| macOS | `~/.local/share/jellyfin/plugins/Crunchyroll/` |
+| Docker | `/config/plugins/Crunchyroll/` |
+
+> Create the `Crunchyroll` folder if it does not exist.
+
+3. Restart Jellyfin
+
+---
+
+### Method 3: Build from Source
+
+```bash
+git clone https://github.com/ocnaibill/crunchyroll-jellyfin.git
+cd crunchyroll-jellyfin
+dotnet build -c Release
+```
+
+The compiled DLL will be located at:
+
+```
+Jellyfin.Plugin.Crunchyroll/bin/Release/net8.0/Jellyfin.Plugin.Crunchyroll.dll
+```
+
+Copy it to your Jellyfin plugins directory and restart the server.
+
+---
+
+## ⚙️ Configuration
+
+Configure the plugin at:
+
+```
+Dashboard > Plugins > Crunchyroll Metadata
+```
+
+### Language Settings
+
+- **Preferred Language**: Primary metadata language
+- **Fallback Language**: Used when the preferred language is unavailable
+
+### Season & Episode Mapping
+
+- **Enable Season Mapping**: Maps Jellyfin seasons to Crunchyroll seasons
+- **Enable Episode Offset Mapping**: Handles continuous episode numbering automatically
+
+### Cache
+
+- **Cache Expiration**: Metadata cache duration in hours (default: 24h)
+
+---
+
+## 🔧 Usage
+
+### Anime Library Setup
+
+1. Create or edit a TV Shows library
+2. Set the content type to **Shows**
+3. Enable **Crunchyroll** under:
+   - Series Metadata Downloaders
+   - Season Metadata Downloaders
+   - Episode Metadata Downloaders
+4. Enable **Crunchyroll** under Image Fetchers
+5. Adjust provider priority as desired
+
+---
+
+### Recommended File Naming
+
+```text
 Animes/
 ├── Jujutsu Kaisen/
 │   ├── Season 1/
 │   │   ├── Jujutsu Kaisen - S01E01 - Ryomen Sukuna.mkv
-│   │   ├── Jujutsu Kaisen - S01E02 - For Myself.mkv
 │   │   └── ...
 │   └── Season 2/
 │       ├── Jujutsu Kaisen - S02E01 - Hidden Inventory.mkv
-│       ├── Jujutsu Kaisen - S02E02 - Hidden Inventory 2.mkv
-│       └── ...
-├── Demon Slayer/
-│   ├── Season 1/
-│   │   └── ...
-│   └── Season 2/
 │       └── ...
 ```
 
-### Vinculando Manualmente a um Anime
+---
 
-Se o plugin não encontrar automaticamente o anime correto:
+### Manual Identification
 
-1. Clique na série → `Edit Metadata`
-2. Em `Identify`, busque pelo nome na Crunchyroll
-3. Selecione o resultado correto
-4. Clique em `Refresh Metadata`
+If the plugin does not automatically match a series:
 
-## 🐛 Solução de Problemas
-
-### O plugin não encontra minha série
-- Verifique se o nome no Jellyfin corresponde ao nome na Crunchyroll
-- Tente buscar manualmente usando "Identify"
-- Verifique se a série está disponível na Crunchyroll
-
-### Metadados em idioma errado
-- Verifique as configurações de idioma do plugin
-- Alguns animes podem não ter metadados em todos os idiomas
-- O plugin usará o idioma de fallback quando necessário
-
-### Episódios não correspondem
-- Certifique-se de que "Habilitar Mapeamento de Offset de Episódios" está ativado
-- Verifique se a numeração local segue o padrão (cada temporada começa em E01)
-- Em casos problemáticos, você pode definir manualmente o ID do episódio
-
-### Logs para Debug
-Ative logs detalhados em `Dashboard > Logs` e procure por entradas com `Crunchyroll`.
-
-## 🔄 Atualizações
-
-Se você instalou via repositório (Método 1), o Jellyfin irá notificá-lo automaticamente quando houver atualizações disponíveis. Basta ir em `Dashboard > Plugins > My Plugins` e clicar em `Update` quando disponível.
-
-## 🤝 Contribuindo
-
-Contribuições são bem-vindas! Por favor:
-
-1. Faça um fork do repositório
-2. Crie uma branch para sua feature (`git checkout -b feature/MinhaFeature`)
-3. Commit suas mudanças (`git commit -m 'Adiciona MinhaFeature'`)
-4. Push para a branch (`git push origin feature/MinhaFeature`)
-5. Abra um Pull Request
-
-## 📄 Licença
-
-Este projeto está licenciado sob a Licença MIT - veja o arquivo [LICENSE.md](LICENSE.md) para detalhes.
-
-## ⚠️ Aviso Legal
-
-Este plugin não é afiliado, endossado ou patrocinado pela Crunchyroll ou pela Sony. 
-"Crunchyroll" é uma marca registrada da Sony Group Corporation.
-
-Este plugin usa dados disponíveis publicamente e não fornece acesso a conteúdo premium ou protegido por direitos autorais.
-
-## 🙏 Agradecimentos
-
-- [Jellyfin](https://jellyfin.org/) - O servidor de mídia open-source
-- Comunidade de desenvolvedores de plugins do Jellyfin
-- Projetos de documentação não-oficial da API da Crunchyroll
+1. Open the series in Jellyfin
+2. Click **Edit Metadata**
+3. Select **Identify**
+4. Search for the title on Crunchyroll
+5. Choose the correct result and refresh metadata
 
 ---
 
+## 🐛 Troubleshooting
+
+### Series not found
+
+- Ensure the series title matches Crunchyroll naming
+- Use manual identification if needed
+- Confirm the anime is available on Crunchyroll
+
+### Incorrect language
+
+- Verify language settings in the plugin configuration
+- Some titles may not be localized in all languages
+
+### Episode mismatch
+
+- Ensure episode offset mapping is enabled
+- Verify that each season starts at episode 1 locally
+
+### Debug Logs
+
+Enable debug logs in `Dashboard > Logs` and search for `Crunchyroll`.
+
+---
+
+## 🔄 Updates
+
+When installed via the plugin repository, Jellyfin will automatically notify you when updates are available.
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome!
+
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to your fork
+5. Open a Pull Request
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License. See `LICENSE.md` for details.
+
+---
+
+## ⚠️ Disclaimer
+
+This plugin is not affiliated with, endorsed by, or sponsored by Crunchyroll or Sony.
+
+Crunchyroll is a registered trademark of Sony Group Corporation.
+
+This plugin only uses publicly available metadata and does not provide access to premium or copyrighted content.
+
+---
+
+## 🙏 Acknowledgements
+
+- Jellyfin project and plugin developer community
+- Unofficial Crunchyroll API documentation projects
+
 <p align="center">
-  Feito com ❤️ para a comunidade do Jellyfin
+  Made with ❤️ for the Jellyfin community
 </p>
