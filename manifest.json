@@ -8,6 +8,13 @@
     "category": "Metadata Provider",
     "versions": [
       {
+        "version": "1.4.11.0",
+        "changelog": "See GitHub release notes",
+        "checksum": "75bebf828aeb0c9cbd14d2544dd466e6",
+        "timestamp": "2026-02-02T15:03:37Z",
+        "sourceUrl": "https://github.com/ocnaibill/crunchyroll-jellyfin/releases/download/v1.4.11/Jellyfin.Plugin.Crunchyroll.zip"
+      },
+      {
         "version": "1.4.10.0",
         "changelog": "Bug fixes and improvements",
         "checksum": "14931c6a6516704394486589d5276260",
