@@ -32,12 +32,12 @@ public class ClearCrunchyrollIDsTask : IScheduledTask
     public async Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
     {
         _logger.LogInformation("Crunchyroll ID clearing task started.");
-        var allTvItems = _libraryManager.GetItemList(new InternalItemsQuery
+        var allTvItems = _libraryManager.GetItemsResult(new InternalItemsQuery
                 {
                     IncludeItemTypes = new[] { BaseItemKind.Series,BaseItemKind.Season,BaseItemKind.Episode },
                     IsVirtualItem = false,
                     Recursive = true,
-                }).ToList();
+                }).Items;
         _logger.LogInformation("Found {Count} Items.", allTvItems.Count);
 
         var total = allTvItems.Count;
@@ -48,13 +48,16 @@ public class ClearCrunchyrollIDsTask : IScheduledTask
             cancellationToken.ThrowIfCancellationRequested();
             var item = allTvItems[i];
 
-             if (!string.IsNullOrEmpty(item.GetProviderId("Crunchyroll")))
-             {
-                _logger.LogInformation("Clearing Crunchyroll ID for {ItemType}: {Name} (ID: {Id})", item.GetType().Name, item.Name, item.GetProviderId("Crunchyroll"));
-                 item.SetProviderId("Crunchyroll", "");
-                 await SaveItemAsync(item, cancellationToken);
-                 updated++;
-             }
+            if (item.ProviderIds?.ContainsKey("Crunchyroll") == true)
+            {
+                _logger.LogInformation("Clearing Crunchyroll ID for {ItemType}: {Name} (ID: {Id})",
+                item.GetType().Name, item.Name, item.GetProviderId("Crunchyroll"));
+
+                item.ProviderIds.Remove("Crunchyroll");
+                await SaveItemAsync(item, cancellationToken);
+                updated++;
+            }
+
 
             progress.Report(total == 0 ? 100 : (i + 1) * 100.0 / total);
         }
