@@ -62,7 +62,7 @@ public class CrunchyrollEpisodeProvider : IRemoteMetadataProvider<Episode, Episo
         var seasons = await apiClient.GetSeasonsAsync(seriesId, cancellationToken).ConfigureAwait(false);
         if (seasons.Count == 0 || null == seasons.FirstOrDefault(s => s.SeasonSequenceNumber == info.ParentIndexNumber))
         {
-            _logger.LogWarning("Season not found");
+            _logger.LogDebug("Season not found");
             return result;
         }
 
