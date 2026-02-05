@@ -257,7 +257,7 @@ public class CrunchyrollSeriesProvider : IRemoteMetadataProvider<Series, SeriesI
             }
         }
 
-        _logger.LogInformation("Best match found with score: {bestScore}", bestScore);
+        _logger.LogDebug("Best match found with score: {bestScore}", bestScore);
         return bestMatch;
     }
 
