@@ -28,7 +28,6 @@ public class ClearCrunchyrollIDsTask : IScheduledTask
     public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
         => Array.Empty<TaskTriggerInfo>();
 
-    //todo: doesnt work (throws error System.MissingMethodException: Method not found: 'System.Collections.Generic.List`1<MediaBrowser.Controller.Entities.BaseItem> MediaBrowser.Controller.Library.ILibraryManager.GetItemList(MediaBrowser.Controller.Entities.InternalItemsQuery)'.)
     public async Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
     {
         _logger.LogInformation("Crunchyroll ID clearing task started.");
@@ -66,9 +65,8 @@ public class ClearCrunchyrollIDsTask : IScheduledTask
         _logger.LogInformation("Task finished. Updated {Updated} of {Total} items.", updated, total);
     }
 
-    private Task SaveItemAsync(BaseItem item, CancellationToken ct)
+    private async Task SaveItemAsync(BaseItem item, CancellationToken ct)
     {
-        item.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, ct);
-        return Task.CompletedTask;
+        await item.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, ct).ConfigureAwait(false);
     }
 }
