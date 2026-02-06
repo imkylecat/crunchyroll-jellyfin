@@ -48,7 +48,8 @@ public class CrunchyrollEpisodeProvider : IRemoteMetadataProvider<Episode, Episo
         var flareSolverrUrl = config?.FlareSolverrUrl;
         var username = config?.Username;
         var password = config?.Password;
-        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password);
+        var dockerContainerName = config?.DockerContainerName;
+        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password, dockerContainerName);
 
         // Get series ID from parent
         string? seriesId = info.SeriesProviderIds?.GetValueOrDefault("Crunchyroll");
@@ -155,7 +156,8 @@ public class CrunchyrollEpisodeProvider : IRemoteMetadataProvider<Episode, Episo
             var flareSolverrUrl = config?.FlareSolverrUrl;
             var username = config?.Username;
             var password = config?.Password;
-            using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password);
+            var dockerContainerName = config?.DockerContainerName;
+            using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password, dockerContainerName);
 
             var episode = await apiClient.GetEpisodeAsync(crunchyrollEpisodeId, cancellationToken).ConfigureAwait(false);
             if (episode != null)
@@ -219,7 +221,7 @@ public class CrunchyrollEpisodeProvider : IRemoteMetadataProvider<Episode, Episo
     {
         var result = new RemoteSearchResult
         {
-            Name = $"{episode.SeriesTitle} - S{episode.SeasonNumber}E{episode.EpisodeNumber} - {episode.Title}",
+            Name = $"{episode.SeriesTitle} - S{episode.SeasonSequenceNumber}E{episode.EpisodeNumber} - {episode.Title}",
             Overview = episode.Description,
             SearchProviderName = "Crunchyroll"
         };

@@ -2,23 +2,35 @@
 ---
 name: "Crunchyroll Metadata"
 guid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-version: "1.4.7.0"
+version: "2.0.0.0"
 targetAbi: "10.9.0.0"
 framework: "net8.0"
 overview: "Fetches anime metadata from Crunchyroll with intelligent season and episode mapping."
 owner: "ocnaibill"
 category: "Metadata"
 image: "logo.png"
-description: "A Jellyfin plugin that scrapes metadata from Crunchyroll. Supports anime series, seasons, and episodes."
+description: "A Jellyfin plugin that fetches anime metadata from Crunchyroll. Bypasses Cloudflare via Chrome DevTools Protocol (CDP) through FlareSolverr. Supports series, seasons, and episodes with intelligent mapping."
 tags:
 - metadata
 - anime
 - crunchyroll
 - scraper
+- cloudflare-bypass
+- cdp
 
 artifacts:
 - "Jellyfin.Plugin.Crunchyroll.dll"
 changelog: >
+  2.0.0.0 - Cloudflare Bypass Overhaul (CDP Architecture)
+    - NEW: Chrome DevTools Protocol (CDP) integration via FlareSolverr
+    - All API calls now go through Chrome's fetch() inside FlareSolverr container
+    - Bypasses Cloudflare TLS fingerprinting (JA3/JA4)
+    - Anonymous auth via CDP (no credentials required for metadata)
+    - Fixed season mapping: uses season_sequence_number instead of season_number
+    - Added SeasonSequenceNumber to episode model
+    - New config option: DockerContainerName for FlareSolverr container
+    - Requires FlareSolverr running as Docker container with Chrome
+
   1.4.7.0 - Scraper Logic Refactor
     - COMPLETE REWRITE of episode extraction logic
     - Removed fragile dependency on hover/Javascript elements

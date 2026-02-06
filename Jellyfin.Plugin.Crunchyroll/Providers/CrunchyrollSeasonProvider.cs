@@ -46,7 +46,8 @@ public class CrunchyrollSeasonProvider : IRemoteMetadataProvider<Season, SeasonI
         var flareSolverrUrl = config?.FlareSolverrUrl;
         var username = config?.Username;
         var password = config?.Password;
-        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password);
+        var dockerContainerName = config?.DockerContainerName;
+        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password, dockerContainerName);
         int SeasonNumber = info.IndexNumber ?? 1;
 
         // Get series ID from parent
@@ -78,7 +79,7 @@ public class CrunchyrollSeasonProvider : IRemoteMetadataProvider<Season, SeasonI
 
             using var fallbackHttpClient = _httpClientFactory.CreateClient();
             using var fallbackApiClient = new CrunchyrollApiClient(
-                fallbackHttpClient, _logger, fallbackLocale, flareSolverrUrl, username, password);
+                fallbackHttpClient, _logger, fallbackLocale, flareSolverrUrl, username, password, dockerContainerName);
 
             var fallbackSeasons = await fallbackApiClient.GetSeasonsAsync(parentSeriesId, cancellationToken)
                 .ConfigureAwait(false);
@@ -120,7 +121,8 @@ public class CrunchyrollSeasonProvider : IRemoteMetadataProvider<Season, SeasonI
         var flareSolverrUrl = config?.FlareSolverrUrl;
         var username = config?.Username;
         var password = config?.Password;
-        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password);
+        var dockerContainerName = config?.DockerContainerName;
+        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password, dockerContainerName);
 
         var seasons = await apiClient.GetSeasonsAsync(seriesId, cancellationToken).ConfigureAwait(false);
 
@@ -169,7 +171,7 @@ public class CrunchyrollSeasonProvider : IRemoteMetadataProvider<Season, SeasonI
     {
         var result = new RemoteSearchResult
         {
-            Name = $"Season {season.SeasonNumber}: {season.Title}",
+            Name = $"Season {season.SeasonSequenceNumber}: {season.Title}",
             Overview = season.Description,
             SearchProviderName = "Crunchyroll"
         };

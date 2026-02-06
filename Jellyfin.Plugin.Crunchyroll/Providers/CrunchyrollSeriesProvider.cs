@@ -45,7 +45,8 @@ public class CrunchyrollSeriesProvider : IRemoteMetadataProvider<Series, SeriesI
         var flareSolverrUrl = config?.FlareSolverrUrl;
         var username = config?.Username;
         var password = config?.Password;
-        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password);
+        var dockerContainerName = config?.DockerContainerName;
+        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password, dockerContainerName);
 
         string? crunchyrollId = info.GetProviderId("Crunchyroll");
         CrunchyrollSeries? series = null;
@@ -115,7 +116,8 @@ public class CrunchyrollSeriesProvider : IRemoteMetadataProvider<Series, SeriesI
         var flareSolverrUrl = config?.FlareSolverrUrl;
         var username = config?.Username;
         var password = config?.Password;
-        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password);
+        var dockerContainerName = config?.DockerContainerName;
+        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password, dockerContainerName);
 
         // Check if we have a Crunchyroll ID
         string? crunchyrollId = searchInfo.GetProviderId("Crunchyroll");

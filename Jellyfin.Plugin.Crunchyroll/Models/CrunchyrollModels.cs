@@ -358,9 +358,18 @@ public class CrunchyrollEpisode
 
     /// <summary>
     /// Gets or sets the season number.
+    /// Note: Crunchyroll often sets this to 1 for ALL seasons within a series.
+    /// Use <see cref="SeasonSequenceNumber"/> for the actual season ordering.
     /// </summary>
     [JsonPropertyName("season_number")]
     public int SeasonNumber { get; set; }
+
+    /// <summary>
+    /// Gets or sets the season sequence number.
+    /// This is the real season order (1, 2, 3...) even when SeasonNumber is always 1.
+    /// </summary>
+    [JsonPropertyName("season_sequence_number")]
+    public int SeasonSequenceNumber { get; set; }
 
     /// <summary>
     /// Gets or sets the episode title.

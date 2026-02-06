@@ -82,13 +82,17 @@ public class EpisodeMappingService
             // Calculate episode offset for regular seasons
             // Use the real SeasonNumber from Crunchyroll instead of sequential numbering
             // This fixes Issue #2 where missing seasons (geo-blocked) caused incorrect mapping
-            int episodeOffset = CalculateEpisodeOffset(seasonEpisodes, season.SeasonNumber);
+            // Use SeasonSequenceNumber for Jellyfin mapping (not SeasonNumber!)
+            // Crunchyroll sets SeasonNumber=1 for ALL seasons within a series,
+            // but SeasonSequenceNumber gives the actual order (1, 2, 3...).
+            // Example: Frieren S1 has season_number=1, season_sequence_number=1
+            //          Frieren S2 has season_number=1, season_sequence_number=2
+            int jellyfinSeasonNum = season.SeasonSequenceNumber;
+            int episodeOffset = CalculateEpisodeOffset(seasonEpisodes, jellyfinSeasonNum);
 
             var entry = new SeasonMappingEntry
             {
-                // Use real SeasonNumber from Crunchyroll to map directly to Jellyfin season
-                // e.g., CR Season 2 -> Jellyfin Season 2 (not sequential)
-                JellyfinSeasonNumber = season.SeasonNumber,
+                JellyfinSeasonNumber = jellyfinSeasonNum,
                 CrunchyrollSeasonId = season.Id,
                 CrunchyrollSeasonNumber = season.SeasonNumber,
                 CrunchyrollSeasonTitle = season.Title,
@@ -98,9 +102,10 @@ public class EpisodeMappingService
             mapping.Seasons.Add(entry);
 
             _logger.LogDebug(
-                "Season mapping: Jellyfin S{JellyfinSeason} -> Crunchyroll S{CrunchyrollSeason} ({Title}), Offset: {Offset}",
+                "Season mapping: Jellyfin S{JellyfinSeason} -> Crunchyroll S{CrunchyrollSeason} seq={SeqNum} ({Title}), Offset: {Offset}",
+                jellyfinSeasonNum,
                 season.SeasonNumber,
-                season.SeasonNumber,
+                season.SeasonSequenceNumber,
                 season.Title,
                 episodeOffset);
         }
@@ -198,10 +203,21 @@ public class EpisodeMappingService
         }
 
         // Find the first episode (by sequence number)
+        // First try matching by SeasonNumber, but fall back to all episodes
+        // since Crunchyroll often has SeasonNumber=1 for all seasons
         var firstEpisode = episodes
             .Where(e => e.SeasonNumber == jellyfinSeasonNumber)
             .OrderBy(e => e.SequenceNumber)
             .FirstOrDefault();
+
+        // Fallback: if no episodes match the season number filter (common when
+        // CR uses season_number=1 for all seasons), just use the first episode
+        if (firstEpisode == null)
+        {
+            firstEpisode = episodes
+                .OrderBy(e => e.SequenceNumber)
+                .FirstOrDefault();
+        }
 
         if (firstEpisode == null || !firstEpisode.EpisodeNumberInt.HasValue)
         {

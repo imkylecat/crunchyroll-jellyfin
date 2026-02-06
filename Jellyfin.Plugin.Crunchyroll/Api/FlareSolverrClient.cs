@@ -1,12 +1,17 @@
+using System.Diagnostics;
+using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.Crunchyroll.Api;
 
 /// <summary>
 /// Client for FlareSolverr proxy to bypass Cloudflare protection.
+/// Supports session persistence, cookie extraction, and API proxying.
 /// </summary>
 public class FlareSolverrClient : IDisposable
 {
@@ -14,6 +19,16 @@ public class FlareSolverrClient : IDisposable
     private readonly ILogger _logger;
     private readonly string _flareSolverrUrl;
     private bool _disposed;
+
+    // Session management for persistent browser instances
+    private string? _sessionId;
+    private static readonly SemaphoreSlim _sessionLock = new(1, 1);
+
+    // Cached Cloudflare cookies and user-agent from last successful request
+    private static string? _cachedUserAgent;
+    private static List<FlareSolverrCookie>? _cachedCookies;
+    private static DateTime _cookieCacheExpiration = DateTime.MinValue;
+    private static readonly TimeSpan CookieCacheDuration = TimeSpan.FromMinutes(15);
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FlareSolverrClient"/> class.
@@ -34,7 +49,156 @@ public class FlareSolverrClient : IDisposable
     public bool IsConfigured => !string.IsNullOrWhiteSpace(_flareSolverrUrl);
 
     /// <summary>
+    /// Obtains Cloudflare bypass cookies and user-agent by visiting Crunchyroll through FlareSolverr.
+    /// These can then be applied to an HttpClient for direct API access.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Tuple of (UserAgent, Cookies) or null if failed.</returns>
+    public async Task<CloudflareCookieResult?> GetCloudflareCookiesAsync(CancellationToken cancellationToken = default)
+    {
+        if (!IsConfigured)
+        {
+            return null;
+        }
+
+        // Check cache first
+        if (_cachedUserAgent != null && _cachedCookies != null && DateTime.UtcNow < _cookieCacheExpiration)
+        {
+            _logger.LogDebug("[FlareSolverr] Using cached CF cookies (expires in {Minutes}m)",
+                (_cookieCacheExpiration - DateTime.UtcNow).TotalMinutes);
+            return new CloudflareCookieResult
+            {
+                UserAgent = _cachedUserAgent,
+                Cookies = _cachedCookies
+            };
+        }
+
+        await _sessionLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            // Double-check cache after lock
+            if (_cachedUserAgent != null && _cachedCookies != null && DateTime.UtcNow < _cookieCacheExpiration)
+            {
+                return new CloudflareCookieResult
+                {
+                    UserAgent = _cachedUserAgent,
+                    Cookies = _cachedCookies
+                };
+            }
+
+            _logger.LogInformation("[FlareSolverr] Obtaining Cloudflare cookies via page visit...");
+
+            var sessionId = GetOrCreateSession();
+
+            var request = new FlareSolverrRequest
+            {
+                Cmd = "request.get",
+                Url = "https://www.crunchyroll.com/",
+                MaxTimeout = 60000,
+                Wait = 5000, // Only need to wait for CF challenge, not full page render
+                Session = sessionId
+            };
+
+            var response = await _httpClient.PostAsJsonAsync(
+                $"{_flareSolverrUrl}/v1",
+                request,
+                cancellationToken).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("[FlareSolverr] Failed to get CF cookies: HTTP {StatusCode}", response.StatusCode);
+                return null;
+            }
+
+            var result = await response.Content.ReadFromJsonAsync<FlareSolverrResponse>(
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            if (result?.Status != "ok" || result.Solution == null)
+            {
+                _logger.LogWarning("[FlareSolverr] Failed to get CF cookies: {Status} - {Message}",
+                    result?.Status, result?.Message);
+                return null;
+            }
+
+            var userAgent = result.Solution.UserAgent;
+            var cookies = result.Solution.Cookies ?? new List<FlareSolverrCookie>();
+
+            // Check if we got cf_clearance
+            var cfClearance = cookies.FirstOrDefault(c => c.Name == "cf_clearance");
+            if (cfClearance == null)
+            {
+                _logger.LogWarning("[FlareSolverr] No cf_clearance cookie obtained. Cloudflare may not be active.");
+            }
+            else
+            {
+                _logger.LogInformation("[FlareSolverr] Got cf_clearance cookie. Caching for {Minutes}m.", CookieCacheDuration.TotalMinutes);
+            }
+
+            // Cache the results
+            _cachedUserAgent = userAgent;
+            _cachedCookies = cookies;
+            _cookieCacheExpiration = DateTime.UtcNow.Add(CookieCacheDuration);
+
+            return new CloudflareCookieResult
+            {
+                UserAgent = userAgent ?? string.Empty,
+                Cookies = cookies
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[FlareSolverr] Error obtaining CF cookies");
+            return null;
+        }
+        finally
+        {
+            _sessionLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Applies Cloudflare cookies and user-agent to an HttpClient handler.
+    /// This allows the HttpClient to bypass Cloudflare using cookies obtained by FlareSolverr.
+    /// </summary>
+    /// <param name="handler">The HttpClientHandler to configure.</param>
+    /// <param name="httpClient">The HttpClient to set user-agent on.</param>
+    /// <param name="cookieResult">The cookie result from GetCloudflareCookiesAsync.</param>
+    public static void ApplyCloudflareCookies(HttpClientHandler handler, HttpClient httpClient, CloudflareCookieResult cookieResult)
+    {
+        if (handler.CookieContainer == null)
+        {
+            handler.CookieContainer = new CookieContainer();
+        }
+
+        foreach (var cookie in cookieResult.Cookies)
+        {
+            if (string.IsNullOrEmpty(cookie.Name) || string.IsNullOrEmpty(cookie.Value))
+            {
+                continue;
+            }
+
+            try
+            {
+                var domain = cookie.Domain ?? ".crunchyroll.com";
+                handler.CookieContainer.Add(new Cookie(cookie.Name, cookie.Value, "/", domain));
+            }
+            catch
+            {
+                // Skip invalid cookies
+            }
+        }
+
+        // Set matching user-agent (critical for cf_clearance validation)
+        if (!string.IsNullOrEmpty(cookieResult.UserAgent))
+        {
+            httpClient.DefaultRequestHeaders.Remove("User-Agent");
+            httpClient.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", cookieResult.UserAgent);
+        }
+    }
+
+    /// <summary>
     /// Fetches a URL through FlareSolverr, bypassing Cloudflare protection.
+    /// Uses session for persistent browser state.
     /// </summary>
     /// <param name="url">The URL to fetch.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -49,11 +213,15 @@ public class FlareSolverrClient : IDisposable
 
         try
         {
+            var sessionId = GetOrCreateSession();
+
             var request = new FlareSolverrRequest
             {
                 Cmd = "request.get",
                 Url = url,
-                MaxTimeout = 60000
+                MaxTimeout = 120000,
+                Wait = 15000, // 15s for JS rendering
+                Session = sessionId
             };
 
             _logger.LogInformation("[FlareSolverr] Requesting URL: {Url}", url);
@@ -87,10 +255,18 @@ public class FlareSolverrClient : IDisposable
                 return null;
             }
 
+            // Update cached cookies from this response
+            if (result.Solution?.Cookies != null && result.Solution.Cookies.Count > 0)
+            {
+                _cachedCookies = result.Solution.Cookies;
+                _cachedUserAgent = result.Solution.UserAgent ?? _cachedUserAgent;
+                _cookieCacheExpiration = DateTime.UtcNow.Add(CookieCacheDuration);
+            }
+
             var htmlLength = result.Solution?.Response?.Length ?? 0;
             var solutionStatus = result.Solution?.Status ?? 0;
             _logger.LogInformation("[FlareSolverr] SUCCESS - Status: {SolutionStatus}, HTML length: {Length} chars", solutionStatus, htmlLength);
-            
+
             if (htmlLength == 0)
             {
                 _logger.LogWarning("[FlareSolverr] Response HTML is empty!");
@@ -99,7 +275,7 @@ public class FlareSolverrClient : IDisposable
             {
                 _logger.LogWarning("[FlareSolverr] Response HTML is very short ({Length} chars), might be an error page", htmlLength);
             }
-            
+
             return result.Solution?.Response;
         }
         catch (Exception ex)
@@ -107,6 +283,606 @@ public class FlareSolverrClient : IDisposable
             _logger.LogError(ex, "Error fetching URL through FlareSolverr: {Url}", url);
             return null;
         }
+    }
+
+    /// <summary>
+    /// Makes a POST request through FlareSolverr's browser with custom headers and body.
+    /// Used for authentication endpoints that require specific headers (e.g., Basic auth).
+    /// The FlareSolverr browser session handles Cloudflare bypass transparently.
+    /// </summary>
+    /// <param name="url">The URL to POST to.</param>
+    /// <param name="postData">The POST body (e.g., form-urlencoded data).</param>
+    /// <param name="headers">Optional custom headers (e.g., Authorization).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The JSON response body, or null if failed.</returns>
+    public async Task<string?> PostViaFlareSolverrAsync(
+        string url,
+        string postData,
+        Dictionary<string, string>? headers = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!IsConfigured)
+        {
+            return null;
+        }
+
+        try
+        {
+            var sessionId = GetOrCreateSession();
+
+            var request = new FlareSolverrRequest
+            {
+                Cmd = "request.post",
+                Url = url,
+                MaxTimeout = 60000,
+                Wait = 3000,
+                Session = sessionId,
+                PostData = postData,
+                Headers = headers
+            };
+
+            _logger.LogDebug("[FlareSolverr] POST via browser: {Url}", url);
+
+            var response = await _httpClient.PostAsJsonAsync(
+                $"{_flareSolverrUrl}/v1",
+                request,
+                cancellationToken).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("[FlareSolverr] POST request failed with HTTP {StatusCode}", response.StatusCode);
+                return null;
+            }
+
+            var result = await response.Content.ReadFromJsonAsync<FlareSolverrResponse>(
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            if (result?.Status != "ok" || result.Solution?.Response == null)
+            {
+                _logger.LogWarning("[FlareSolverr] POST returned error: {Status} - {Message}",
+                    result?.Status, result?.Message);
+                return null;
+            }
+
+            // Update cached cookies from this response
+            if (result.Solution?.Cookies != null && result.Solution.Cookies.Count > 0)
+            {
+                _cachedCookies = result.Solution.Cookies;
+                _cachedUserAgent = result.Solution.UserAgent ?? _cachedUserAgent;
+                _cookieCacheExpiration = DateTime.UtcNow.Add(CookieCacheDuration);
+            }
+
+            _logger.LogDebug("[FlareSolverr] POST response status: {SolutionStatus}, length: {Length}",
+                result.Solution.Status, result.Solution.Response.Length);
+
+            return ExtractJsonFromResponse(result.Solution.Response);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[FlareSolverr] Error POSTing via browser: {Url}", url);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Makes a GET request to a Crunchyroll API endpoint through FlareSolverr.
+    /// The FlareSolverr browser session already has CF cookies, so API requests bypass Cloudflare.
+    /// Supports custom headers for authenticated API access (Bearer token).
+    /// </summary>
+    /// <param name="apiUrl">The full API URL to request.</param>
+    /// <param name="headers">Optional custom headers (e.g., Authorization: Bearer).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The JSON string response, or null if failed.</returns>
+    public async Task<string?> GetApiJsonAsync(string apiUrl, Dictionary<string, string>? headers = null, CancellationToken cancellationToken = default)
+    {
+        if (!IsConfigured)
+        {
+            return null;
+        }
+
+        try
+        {
+            var sessionId = GetOrCreateSession();
+
+            var request = new FlareSolverrRequest
+            {
+                Cmd = "request.get",
+                Url = apiUrl,
+                MaxTimeout = 60000,
+                Wait = 2000,
+                Session = sessionId,
+                Headers = headers
+            };
+
+            _logger.LogDebug("[FlareSolverr] API GET: {Url}", apiUrl);
+
+            var response = await _httpClient.PostAsJsonAsync(
+                $"{_flareSolverrUrl}/v1",
+                request,
+                cancellationToken).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("[FlareSolverr] API GET failed with HTTP {StatusCode}", response.StatusCode);
+                return null;
+            }
+
+            var result = await response.Content.ReadFromJsonAsync<FlareSolverrResponse>(
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            if (result?.Status != "ok" || result.Solution?.Response == null)
+            {
+                _logger.LogWarning("[FlareSolverr] API GET returned error: {Status} - {Message}",
+                    result?.Status, result?.Message);
+                return null;
+            }
+
+            return ExtractJsonFromResponse(result.Solution.Response);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[FlareSolverr] Error proxying API request: {Url}", apiUrl);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Extracts JSON content from FlareSolverr's HTML-wrapped response.
+    /// Chrome renders raw JSON inside a &lt;pre&gt; tag. This method handles
+    /// both pre-wrapped JSON and raw JSON responses, with HTML entity decoding.
+    /// </summary>
+    private string? ExtractJsonFromResponse(string html)
+    {
+        // Pattern 1: JSON wrapped in <pre> tag (Chrome's default JSON rendering)
+        var preMatch = Regex.Match(html, @"<pre[^>]*>(.*?)</pre>", RegexOptions.Singleline);
+        if (preMatch.Success)
+        {
+            var content = preMatch.Groups[1].Value;
+            // Decode HTML entities (e.g., &amp; → &, &quot; → ")
+            content = WebUtility.HtmlDecode(content);
+            return content;
+        }
+
+        // Pattern 2: Raw JSON (no HTML wrapping)
+        var trimmed = html.Trim();
+        if (trimmed.StartsWith('{') || trimmed.StartsWith('['))
+        {
+            return trimmed;
+        }
+
+        _logger.LogWarning("[FlareSolverr] Response was not JSON. Length: {Length}", html.Length);
+        return null;
+    }
+
+    // Python script that runs inside FlareSolverr container via docker exec.
+    // It discovers Chrome's CDP port, connects via websocket, and executes
+    // a fetch() call to Crunchyroll's auth endpoint from the browser context.
+    // This bypasses both Cloudflare TLS fingerprinting and API authentication.
+    private const string CdpAuthScript = @"
+import json,re,glob,sys
+port=None
+for p in glob.glob('/proc/*/cmdline'):
+    try:
+        with open(p,'rb') as f:
+            data=f.read().decode('utf-8',errors='ignore')
+        m=re.search(r'--remote-debugging-port=(\d+)',data)
+        if m:
+            port=int(m.group(1))
+            break
+    except:
+        pass
+if not port:
+    print(json.dumps({'error':'no_chrome_port'}))
+    sys.exit(0)
+import urllib.request
+try:
+    pages=json.loads(urllib.request.urlopen(f'http://127.0.0.1:{port}/json/list',timeout=5).read())
+except:
+    print(json.dumps({'error':'cdp_connect_failed','port':port}))
+    sys.exit(0)
+ws_url=None
+for p in pages:
+    if 'crunchyroll' in p.get('url',''):
+        ws_url=p.get('webSocketDebuggerUrl')
+        break
+if not ws_url and pages:
+    ws_url=pages[0].get('webSocketDebuggerUrl')
+if not ws_url:
+    print(json.dumps({'error':'no_pages'}))
+    sys.exit(0)
+import websocket
+ws=websocket.create_connection(ws_url,suppress_origin=True,timeout=30)
+ws.send(json.dumps({'id':1,'method':'Runtime.evaluate','params':{'expression':'window.location.hostname','returnByValue':True}}))
+r=json.loads(ws.recv())
+h=r.get('result',{}).get('result',{}).get('value','')
+if 'crunchyroll' not in h:
+    ws.send(json.dumps({'id':2,'method':'Page.navigate','params':{'url':'https://www.crunchyroll.com/'}}))
+    ws.recv()
+    import time
+    time.sleep(5)
+js=""""""(async()=>{try{const r=await fetch('/auth/v1/token',{method:'POST',headers:{'Authorization':'Basic bmR0aTZicXlqcm9wNXZnZjF0dnU6elpIcS00SEJJVDlDb2FMcnBPREJjRVRCTUNHai1QNlg=','Content-Type':'application/x-www-form-urlencoded'},body:'grant_type=client_id&device_id='+crypto.randomUUID()});const d=await r.json();return JSON.stringify({access_token:d.access_token,token_type:d.token_type,expires_in:d.expires_in,country:d.country})}catch(e){return JSON.stringify({error:e.message})}})()""""""
+ws.send(json.dumps({'id':3,'method':'Runtime.evaluate','params':{'expression':js,'awaitPromise':True,'returnByValue':True}}))
+r=json.loads(ws.recv())
+v=r.get('result',{}).get('result',{}).get('value','{}')
+ws.close()
+print(v)
+";
+
+    /// <summary>
+    /// Obtains a Crunchyroll API access token by executing a CDP (Chrome DevTools Protocol)
+    /// script inside the FlareSolverr Docker container. The script connects to Chrome's
+    /// internal CDP port and executes a fetch() call to the auth endpoint from the browser
+    /// context, bypassing both Cloudflare TLS fingerprinting and API authentication.
+    /// </summary>
+    /// <param name="dockerContainerName">The Docker container name/ID of FlareSolverr.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A CdpAuthResult with the access token, or null if failed.</returns>
+    public async Task<CdpAuthResult?> GetAuthTokenViaCdpAsync(string dockerContainerName, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(dockerContainerName))
+        {
+            _logger.LogDebug("[CDP Auth] Docker container name not configured");
+            return null;
+        }
+
+        try
+        {
+            _logger.LogInformation("[CDP Auth] Getting auth token via CDP from container '{Container}'...", dockerContainerName);
+
+            // Base64 encode the Python script to avoid shell escaping issues
+            var scriptBytes = Encoding.UTF8.GetBytes(CdpAuthScript.Trim());
+            var encodedScript = Convert.ToBase64String(scriptBytes);
+
+            // Build docker exec command
+            var pythonCmd = $"import base64; exec(base64.b64decode('{encodedScript}'))";
+
+            using var process = new Process();
+            process.StartInfo = new ProcessStartInfo
+            {
+                FileName = "docker",
+                ArgumentList = { "exec", dockerContainerName, "python3", "-c", pythonCmd },
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            process.Start();
+
+            var stdout = await process.StandardOutput.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+            var stderr = await process.StandardError.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+
+            // Wait for process to exit (with timeout)
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(60));
+
+            try
+            {
+                await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("[CDP Auth] Docker exec timed out after 60s");
+                try { process.Kill(); } catch { /* ignore */ }
+                return null;
+            }
+
+            if (process.ExitCode != 0)
+            {
+                _logger.LogWarning("[CDP Auth] Docker exec failed with exit code {ExitCode}. Stderr: {Stderr}",
+                    process.ExitCode, stderr.Length > 500 ? stderr.Substring(0, 500) : stderr);
+                return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(stdout))
+            {
+                _logger.LogWarning("[CDP Auth] Empty output from CDP script. Stderr: {Stderr}", stderr);
+                return null;
+            }
+
+            // Parse the JSON output
+            var result = JsonSerializer.Deserialize<CdpAuthResult>(stdout.Trim());
+            if (result == null)
+            {
+                _logger.LogWarning("[CDP Auth] Failed to parse output: {Output}", stdout.Trim());
+                return null;
+            }
+
+            if (!string.IsNullOrEmpty(result.Error))
+            {
+                _logger.LogWarning("[CDP Auth] Script error: {Error}", result.Error);
+                return null;
+            }
+
+            if (string.IsNullOrEmpty(result.AccessToken))
+            {
+                _logger.LogWarning("[CDP Auth] No access_token in response: {Output}", stdout.Trim());
+                return null;
+            }
+
+            _logger.LogInformation("[CDP Auth] Successfully obtained token via CDP! Country: {Country}, Expires: {Expires}s",
+                result.Country, result.ExpiresIn);
+
+            return result;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "[CDP Auth] Error running CDP auth script. Is Docker accessible and container '{Container}' running?",
+                dockerContainerName);
+            return null;
+        }
+    }
+
+    // Generic Python script for executing arbitrary JavaScript via Chrome DevTools Protocol.
+    // Accepts the JS expression as a base64-encoded command-line argument (sys.argv[1]).
+    // The script discovers Chrome's CDP port, connects via websocket, ensures we're on
+    // crunchyroll.com, then evaluates the provided JS expression and prints the result.
+    private const string CdpFetchScript = @"
+import json,re,glob,sys,base64,urllib.request,websocket
+js_expr=base64.b64decode(sys.argv[1]).decode('utf-8')
+port=None
+for p in glob.glob('/proc/*/cmdline'):
+    try:
+        with open(p,'rb') as f:
+            data=f.read().decode('utf-8',errors='ignore')
+        m=re.search(r'--remote-debugging-port=(\d+)',data)
+        if m:
+            port=int(m.group(1))
+            break
+    except:
+        pass
+if not port:
+    print(json.dumps({'error':'no_chrome_port'}))
+    sys.exit(0)
+try:
+    pages=json.loads(urllib.request.urlopen('http://127.0.0.1:%d/json/list'%port,timeout=5).read())
+except:
+    print(json.dumps({'error':'cdp_connect_failed'}))
+    sys.exit(0)
+ws_url=None
+for p in pages:
+    if 'crunchyroll' in p.get('url',''):
+        ws_url=p.get('webSocketDebuggerUrl')
+        break
+if not ws_url and pages:
+    ws_url=pages[0].get('webSocketDebuggerUrl')
+if not ws_url:
+    print(json.dumps({'error':'no_pages'}))
+    sys.exit(0)
+ws=websocket.create_connection(ws_url,suppress_origin=True,timeout=30)
+ws.send(json.dumps({'id':1,'method':'Runtime.evaluate','params':{'expression':'window.location.hostname','returnByValue':True}}))
+r=json.loads(ws.recv())
+h=r.get('result',{}).get('result',{}).get('value','')
+if 'crunchyroll' not in h:
+    ws.send(json.dumps({'id':2,'method':'Page.navigate','params':{'url':'https://www.crunchyroll.com/'}}))
+    ws.recv()
+    import time
+    time.sleep(5)
+ws.send(json.dumps({'id':3,'method':'Runtime.evaluate','params':{'expression':js_expr,'awaitPromise':True,'returnByValue':True}}))
+r=json.loads(ws.recv())
+v=r.get('result',{}).get('result',{}).get('value','{}')
+ws.close()
+print(v)
+";
+
+    /// <summary>
+    /// Executes a JavaScript expression inside Chrome via CDP (Chrome DevTools Protocol)
+    /// by running a Python script inside the FlareSolverr Docker container.
+    /// The JS expression must return a string value (use JSON.stringify for objects).
+    /// This is the low-level method used by <see cref="CdpFetchJsonAsync"/> and can also
+    /// be called directly for custom JavaScript execution.
+    /// </summary>
+    /// <param name="dockerContainerName">The Docker container name/ID of FlareSolverr.</param>
+    /// <param name="jsExpression">The JavaScript expression to evaluate (must be an async IIFE that returns a string).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The string result from the JS expression, or null if failed.</returns>
+    public async Task<string?> ExecuteCdpJsAsync(string dockerContainerName, string jsExpression, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(dockerContainerName))
+        {
+            _logger.LogDebug("[CDP] Docker container name not configured");
+            return null;
+        }
+
+        try
+        {
+            _logger.LogDebug("[CDP] Executing JS via CDP in container '{Container}'...", dockerContainerName);
+
+            // Base64 encode the Python script and JS expression separately.
+            // The Python script is passed as the -c argument, and the JS expression
+            // is passed as a positional argument (sys.argv[1]) — both base64-encoded
+            // to completely avoid shell escaping issues.
+            var scriptBytes = Encoding.UTF8.GetBytes(CdpFetchScript.Trim());
+            var scriptB64 = Convert.ToBase64String(scriptBytes);
+            var jsB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(jsExpression));
+
+            var pythonBootstrap = $"import base64; exec(base64.b64decode('{scriptB64}'))";
+
+            using var process = new Process();
+            process.StartInfo = new ProcessStartInfo
+            {
+                FileName = "docker",
+                ArgumentList = { "exec", dockerContainerName, "python3", "-c", pythonBootstrap, jsB64 },
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            process.Start();
+
+            var stdout = await process.StandardOutput.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+            var stderr = await process.StandardError.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(60));
+
+            try
+            {
+                await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("[CDP] Docker exec timed out after 60s");
+                try { process.Kill(); } catch { /* ignore */ }
+                return null;
+            }
+
+            if (process.ExitCode != 0)
+            {
+                _logger.LogWarning("[CDP] Docker exec failed (exit {ExitCode}). Stderr: {Stderr}",
+                    process.ExitCode, stderr.Length > 500 ? stderr[..500] : stderr);
+                return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(stdout))
+            {
+                _logger.LogWarning("[CDP] Empty output from script. Stderr: {Stderr}", stderr);
+                return null;
+            }
+
+            var output = stdout.Trim();
+
+            // Check for script-level errors (CDP connection issues, no Chrome found, etc.)
+            if (output.StartsWith("{") && output.Contains("\"error\""))
+            {
+                try
+                {
+                    var errorObj = JsonSerializer.Deserialize<JsonElement>(output);
+                    if (errorObj.TryGetProperty("error", out var errProp))
+                    {
+                        var errorMsg = errProp.GetString();
+                        // Only treat as error if it's a script/CDP error, not an API error
+                        if (errorMsg == "no_chrome_port" || errorMsg == "cdp_connect_failed" || errorMsg == "no_pages")
+                        {
+                            _logger.LogWarning("[CDP] Script error: {Error}", errorMsg);
+                            return null;
+                        }
+                    }
+                }
+                catch { /* not parseable, continue with raw output */ }
+            }
+
+            return output;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "[CDP] Error running script in container '{Container}'", dockerContainerName);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Makes an HTTP request via Chrome's fetch() API using CDP (Chrome DevTools Protocol).
+    /// Executes inside FlareSolverr's Chrome browser, bypassing Cloudflare TLS fingerprinting.
+    /// Use relative URLs (e.g., "/auth/v1/token") to stay on the crunchyroll.com origin,
+    /// or full URLs if Chrome is already on the correct domain.
+    /// </summary>
+    /// <param name="dockerContainerName">The Docker container name/ID of FlareSolverr.</param>
+    /// <param name="url">The URL to fetch (relative like "/api/..." or absolute).</param>
+    /// <param name="method">HTTP method (GET, POST, etc.).</param>
+    /// <param name="headers">Optional request headers.</param>
+    /// <param name="body">Optional request body (for POST/PUT).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The JSON response as a string, or null if failed.</returns>
+    public async Task<string?> CdpFetchJsonAsync(
+        string dockerContainerName,
+        string url,
+        string method = "GET",
+        Dictionary<string, string>? headers = null,
+        string? body = null,
+        CancellationToken cancellationToken = default)
+    {
+        // Build JavaScript fetch() options object
+        var optionParts = new List<string>();
+
+        if (!string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase))
+        {
+            optionParts.Add($"method:'{EscapeJsString(method)}'");
+        }
+
+        if (headers != null && headers.Count > 0)
+        {
+            var headerEntries = headers.Select(h => $"'{EscapeJsString(h.Key)}':'{EscapeJsString(h.Value)}'");
+            optionParts.Add($"headers:{{{string.Join(",", headerEntries)}}}");
+        }
+
+        if (!string.IsNullOrEmpty(body))
+        {
+            optionParts.Add($"body:'{EscapeJsString(body)}'");
+        }
+
+        var fetchOptions = optionParts.Count > 0 ? "{" + string.Join(",", optionParts) + "}" : "{}";
+
+        // Build the async IIFE: fetch → parse JSON → return as string
+        var jsExpression = $"(async()=>{{try{{const r=await fetch('{EscapeJsString(url)}',{fetchOptions});const d=await r.json();return JSON.stringify(d)}}catch(e){{return JSON.stringify({{error:e.message}})}}}})()";
+
+        _logger.LogDebug("[CDP Fetch] {Method} {Url}", method, url);
+
+        return await ExecuteCdpJsAsync(dockerContainerName, jsExpression, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Escapes a string for safe use inside JavaScript single-quoted string literals.
+    /// </summary>
+    private static string EscapeJsString(string value)
+    {
+        return value
+            .Replace("\\", "\\\\")
+            .Replace("'", "\\'")
+            .Replace("\n", "\\n")
+            .Replace("\r", "\\r");
+    }
+
+    /// <summary>
+    /// Gets or creates a FlareSolverr session ID for persistent browser state.
+    /// </summary>
+    private string GetOrCreateSession()
+    {
+        if (_sessionId != null)
+        {
+            return _sessionId;
+        }
+
+        _sessionId = $"crunchyroll_{Guid.NewGuid():N}".Substring(0, 20);
+        _logger.LogDebug("[FlareSolverr] Created session: {SessionId}", _sessionId);
+        return _sessionId;
+    }
+
+    /// <summary>
+    /// Destroys the current FlareSolverr session to free resources.
+    /// </summary>
+    public async Task DestroySessionAsync(CancellationToken cancellationToken = default)
+    {
+        if (_sessionId == null)
+        {
+            return;
+        }
+
+        try
+        {
+            var request = new { cmd = "sessions.destroy", session = _sessionId };
+            await _httpClient.PostAsJsonAsync($"{_flareSolverrUrl}/v1", request, cancellationToken).ConfigureAwait(false);
+            _logger.LogDebug("[FlareSolverr] Destroyed session: {SessionId}", _sessionId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[FlareSolverr] Failed to destroy session");
+        }
+        finally
+        {
+            _sessionId = null;
+        }
+    }
+
+    /// <summary>
+    /// Invalidates the cached Cloudflare cookies, forcing a fresh fetch next time.
+    /// </summary>
+    public static void InvalidateCookieCache()
+    {
+        _cachedUserAgent = null;
+        _cachedCookies = null;
+        _cookieCacheExpiration = DateTime.MinValue;
     }
 
     /// <inheritdoc />
@@ -129,11 +905,51 @@ public class FlareSolverrClient : IDisposable
 
         if (disposing)
         {
+            // Try to clean up session (fire-and-forget)
+            if (_sessionId != null)
+            {
+                try
+                {
+                    _ = DestroySessionAsync(CancellationToken.None);
+                }
+                catch
+                {
+                    // Ignore cleanup errors
+                }
+            }
+
             _httpClient.Dispose();
         }
 
         _disposed = true;
     }
+}
+
+/// <summary>
+/// Result of obtaining Cloudflare bypass cookies from FlareSolverr.
+/// </summary>
+public class CloudflareCookieResult
+{
+    /// <summary>
+    /// Gets or sets the user-agent string used by FlareSolverr's browser.
+    /// Must be used in conjunction with the cookies for cf_clearance to be valid.
+    /// </summary>
+    public string UserAgent { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the cookies obtained from FlareSolverr (including cf_clearance).
+    /// </summary>
+    public List<FlareSolverrCookie> Cookies { get; set; } = new();
+
+    /// <summary>
+    /// Gets the cf_clearance cookie value if present.
+    /// </summary>
+    public string? CfClearance => Cookies.FirstOrDefault(c => c.Name == "cf_clearance")?.Value;
+
+    /// <summary>
+    /// Gets a value indicating whether this result contains valid Cloudflare cookies.
+    /// </summary>
+    public bool HasCfClearance => CfClearance != null;
 }
 
 /// <summary>
@@ -157,15 +973,36 @@ public class FlareSolverrRequest
     /// Gets or sets the max timeout in milliseconds.
     /// </summary>
     [JsonPropertyName("maxTimeout")]
-    public int MaxTimeout { get; set; } = 120000;  // 2 minutes max
+    public int MaxTimeout { get; set; } = 120000;
 
     /// <summary>
     /// Gets or sets the time to wait for JavaScript to load (in milliseconds).
-    /// This allows dynamic content to render before capturing the page.
-    /// Crunchyroll's SPA requires significant time to render episode lists.
     /// </summary>
     [JsonPropertyName("wait")]
-    public int Wait { get; set; } = 12000;  // 12 seconds for JS to render
+    public int Wait { get; set; } = 12000;
+
+    /// <summary>
+    /// Gets or sets the session ID for persistent browser state.
+    /// Using sessions keeps cookies and browser context across requests.
+    /// </summary>
+    [JsonPropertyName("session")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Session { get; set; }
+
+    /// <summary>
+    /// Gets or sets custom HTTP headers for the request.
+    /// These are passed to the browser via FlareSolverr.
+    /// </summary>
+    [JsonPropertyName("headers")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, string>? Headers { get; set; }
+
+    /// <summary>
+    /// Gets or sets the POST body data (for request.post command).
+    /// </summary>
+    [JsonPropertyName("postData")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PostData { get; set; }
 }
 
 /// <summary>
@@ -250,4 +1087,40 @@ public class FlareSolverrCookie
     /// </summary>
     [JsonPropertyName("domain")]
     public string? Domain { get; set; }
+}
+
+/// <summary>
+/// Result from CDP-based authentication via FlareSolverr's Chrome browser.
+/// </summary>
+public class CdpAuthResult
+{
+    /// <summary>
+    /// Gets or sets the access token for Crunchyroll API.
+    /// </summary>
+    [JsonPropertyName("access_token")]
+    public string? AccessToken { get; set; }
+
+    /// <summary>
+    /// Gets or sets the token type (typically "Bearer").
+    /// </summary>
+    [JsonPropertyName("token_type")]
+    public string? TokenType { get; set; }
+
+    /// <summary>
+    /// Gets or sets the token expiration time in seconds.
+    /// </summary>
+    [JsonPropertyName("expires_in")]
+    public int ExpiresIn { get; set; }
+
+    /// <summary>
+    /// Gets or sets the country code from the auth response.
+    /// </summary>
+    [JsonPropertyName("country")]
+    public string? Country { get; set; }
+
+    /// <summary>
+    /// Gets or sets the error message if authentication failed.
+    /// </summary>
+    [JsonPropertyName("error")]
+    public string? Error { get; set; }
 }

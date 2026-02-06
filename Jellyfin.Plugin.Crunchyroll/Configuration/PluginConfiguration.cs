@@ -85,5 +85,12 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Leave empty to try direct API access (may not work from server IPs).
     /// </summary>
     public string FlareSolverrUrl { get; set; }
+
+    /// <summary>
+    /// Gets or sets the Docker container name/ID of FlareSolverr.
+    /// Used for CDP-based authentication (docker exec into the container to get auth tokens).
+    /// Default: "flaresolverr". Leave empty to disable Docker-based auth.
+    /// </summary>
+    public string DockerContainerName { get; set; } = "flaresolverr";
 }
 

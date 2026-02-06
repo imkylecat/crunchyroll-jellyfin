@@ -69,7 +69,8 @@ public class CrunchyrollSeriesImageProvider : IRemoteImageProvider, IHasOrder
         var flareSolverrUrl = config?.FlareSolverrUrl;
         var username = config?.Username;
         var password = config?.Password;
-        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password);
+        var dockerContainerName = config?.DockerContainerName;
+        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password, dockerContainerName);
 
         var series = await apiClient.GetSeriesAsync(crunchyrollId, cancellationToken).ConfigureAwait(false);
         if (series?.Images == null)
@@ -194,7 +195,8 @@ public class CrunchyrollEpisodeImageProvider : IRemoteImageProvider, IHasOrder
         var flareSolverrUrl = config?.FlareSolverrUrl;
         var username = config?.Username;
         var password = config?.Password;
-        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password);
+        var dockerContainerName = config?.DockerContainerName;
+        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password, dockerContainerName);
 
         var episode = await apiClient.GetEpisodeAsync(crunchyrollEpisodeId, cancellationToken).ConfigureAwait(false);
         if (episode?.Images?.Thumbnail == null)

@@ -8,17 +8,17 @@
     "category": "Metadata Provider",
     "versions": [
       {
+        "version": "2.0.0.0",
+        "changelog": "Cloudflare Bypass Overhaul (CDP Architecture). All API calls now go through Chrome DevTools Protocol inside FlareSolverr, bypassing Cloudflare TLS fingerprinting. Fixed critical season mapping bug (season_sequence_number vs season_number). Anonymous auth via CDP. New config: DockerContainerName. Requires FlareSolverr as Docker container with websocket-client.",
+        "checksum": "",
+        "timestamp": "2026-02-06T23:00:00Z",
+        "sourceUrl": "https://github.com/ocnaibill/crunchyroll-jellyfin/releases/download/v2.0.0.0/Jellyfin.Plugin.Crunchyroll.zip"
+      },
+      {
         "version": "1.5.1.2",
         "changelog": "See GitHub release notes",
         "checksum": "328b11728cb7891c0c877f4b7c56ab27",
         "timestamp": "2026-02-06T19:10:44Z",
-        "sourceUrl": "https://github.com/ocnaibill/crunchyroll-jellyfin/releases/download/v1.5.1.2/Jellyfin.Plugin.Crunchyroll.zip"
-      },
-      {
-        "version": "1.5.1.2",
-        "changelog": "Maintenance release. Includes fixes for PR #6 (typos, async await) and restores stable season mapping logic. Reverted scraping changes that caused Season 2 mapping issues.",
-        "checksum": "",
-        "timestamp": "2026-02-06T19:10:00Z",
         "sourceUrl": "https://github.com/ocnaibill/crunchyroll-jellyfin/releases/download/v1.5.1.2/Jellyfin.Plugin.Crunchyroll.zip"
       },
       {
