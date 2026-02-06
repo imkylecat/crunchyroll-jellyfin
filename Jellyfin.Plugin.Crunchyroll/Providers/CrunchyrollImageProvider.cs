@@ -70,7 +70,8 @@ public class CrunchyrollSeriesImageProvider : IRemoteImageProvider, IHasOrder
         var username = config?.Username;
         var password = config?.Password;
         var dockerContainerName = config?.DockerContainerName;
-        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password, dockerContainerName);
+        var chromeCdpUrl = config?.ChromeCdpUrl;
+        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password, dockerContainerName, chromeCdpUrl);
 
         var series = await apiClient.GetSeriesAsync(crunchyrollId, cancellationToken).ConfigureAwait(false);
         if (series?.Images == null)
@@ -196,7 +197,8 @@ public class CrunchyrollEpisodeImageProvider : IRemoteImageProvider, IHasOrder
         var username = config?.Username;
         var password = config?.Password;
         var dockerContainerName = config?.DockerContainerName;
-        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password, dockerContainerName);
+        var chromeCdpUrl = config?.ChromeCdpUrl;
+        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password, dockerContainerName, chromeCdpUrl);
 
         var episode = await apiClient.GetEpisodeAsync(crunchyrollEpisodeId, cancellationToken).ConfigureAwait(false);
         if (episode?.Images?.Thumbnail == null)

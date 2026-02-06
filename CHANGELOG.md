@@ -1,5 +1,29 @@
 # Changelog
 
+## [2.1.0.0] - 2026-02-07
+
+### 🚀 New Features
+
+- **EnsureBrowserAliveAsync**: Plugin now automatically creates and maintains a FlareSolverr session to keep Chrome alive before any CDP operation. No more "no Chrome port found" errors after FlareSolverr restarts.
+- **CDP Episode Fetching**: When the scraping cache misses, `GetEpisodesAsync` now falls back to `TryGetEpisodesViaApiProxyAsync` (CDP proxy) instead of returning empty results. Episodes are fetched through Chrome just like seasons.
+- **Chrome CDP URL Config**: New advanced plugin setting to override the auto-detected Chrome DevTools Protocol URL.
+
+### 🐛 Bug Fixes
+
+- **Session cleanup improved**: `DestroySessionAsync` now uses a fresh 5-second `CancellationTokenSource` instead of the caller's token, preventing `TaskCanceledException` warnings during plugin shutdown.
+- **Dispose reliability**: `Dispose()` now synchronously awaits session destruction before disposing the HttpClient.
+- **Season matching enhanced**: `FindMatchingSeasonByNumber` now has 3-tier fallback: (1) match by `SeasonSequenceNumber`, (2) match by `SeasonNumber`, (3) for single-season series, use the only available season for Season 1 regardless of numbering.
+
+### 📚 Documentation
+
+- **FlareSolverr is now documented as required** — Added prominent notice to both README.md and README.pt-BR.md
+- **New [FLARESOLVERR.md](FLARESOLVERR.md)**: Complete installation and configuration guide (bilingual EN/PT-BR) covering Docker setup, Docker Compose, socket permissions, plugin configuration, troubleshooting, and network diagram.
+
+### 🔧 Internal
+
+- Added detailed debug logging for season details in `TryGetSeasonsViaApiProxyAsync` (Id, Title, SeasonNumber, SeasonSequenceNumber, AudioLocales, NumberOfEpisodes)
+- CDP session state tracked via static fields (`_cdpSessionActive`, `_cdpSessionId`, `_cdpSessionLock`) with proper thread safety
+
 ## [2.0.0.0] - 2026-02-06
 
 ### ⚡ Breaking Changes

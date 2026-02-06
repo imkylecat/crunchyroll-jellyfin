@@ -92,5 +92,14 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Default: "flaresolverr". Leave empty to disable Docker-based auth.
     /// </summary>
     public string DockerContainerName { get; set; } = "flaresolverr";
+
+    /// <summary>
+    /// Gets or sets the Chrome DevTools Protocol URL for direct WebSocket connection.
+    /// This allows the plugin to connect directly to Chrome's CDP without Docker access.
+    /// Set this to the host:port where Chrome's CDP is accessible.
+    /// Example: http://192.168.1.20:9222
+    /// Leave empty to fall back to Docker-based CDP (requires Docker socket access).
+    /// </summary>
+    public string ChromeCdpUrl { get; set; } = string.Empty;
 }
 

@@ -49,7 +49,8 @@ public class CrunchyrollEpisodeProvider : IRemoteMetadataProvider<Episode, Episo
         var username = config?.Username;
         var password = config?.Password;
         var dockerContainerName = config?.DockerContainerName;
-        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password, dockerContainerName);
+        var chromeCdpUrl = config?.ChromeCdpUrl;
+        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password, dockerContainerName, chromeCdpUrl);
 
         // Get series ID from parent
         string? seriesId = info.SeriesProviderIds?.GetValueOrDefault("Crunchyroll");
@@ -157,7 +158,8 @@ public class CrunchyrollEpisodeProvider : IRemoteMetadataProvider<Episode, Episo
             var username = config?.Username;
             var password = config?.Password;
             var dockerContainerName = config?.DockerContainerName;
-            using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password, dockerContainerName);
+            var chromeCdpUrl = config?.ChromeCdpUrl;
+            using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password, dockerContainerName, chromeCdpUrl);
 
             var episode = await apiClient.GetEpisodeAsync(crunchyrollEpisodeId, cancellationToken).ConfigureAwait(false);
             if (episode != null)

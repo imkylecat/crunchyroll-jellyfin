@@ -20,6 +20,26 @@ Um plugin de metadados para o Jellyfin que busca informações de animes diretam
 
 ---
 
+## 🔥 FlareSolverr Obrigatório
+
+> **⚠️ Desde a versão 2.0.0, o FlareSolverr é obrigatório para o funcionamento deste plugin.**
+
+A Crunchyroll agora é protegida pelo Cloudflare, que bloqueia todas as requisições diretas à API. Este plugin utiliza o **Chrome DevTools Protocol (CDP)** dentro do navegador do FlareSolverr para contornar o Cloudflare e buscar os metadados.
+
+Sem o FlareSolverr em execução, o plugin **não conseguirá obter nenhum metadado**.
+
+📖 **[Guia de Instalação e Configuração do FlareSolverr](FLARESOLVERR.md)**
+
+**Início rápido:**
+
+```bash
+docker run -d --name flaresolverr -p 8191:8191 ghcr.io/flaresolverr/flaresolverr:latest
+```
+
+Em seguida, configure o plugin com a URL do FlareSolverr (`http://localhost:8191`) e o nome do container Docker (`flaresolverr`) nas configurações do plugin.
+
+---
+
 ## 🎯 Problemas que Este Plugin Resolve
 
 ### Temporadas Separadas (comportamento estilo AniDB)
@@ -78,12 +98,12 @@ docker restart jellyfin
 1. Baixe `Jellyfin.Plugin.Crunchyroll.zip` na página de Releases
 2. Extraia os arquivos para o diretório de plugins apropriado:
 
-| Sistema | Caminho |
-|--------|--------|
-| Linux | `/var/lib/jellyfin/plugins/Crunchyroll/` |
+| Sistema | Caminho                                               |
+| ------- | ----------------------------------------------------- |
+| Linux   | `/var/lib/jellyfin/plugins/Crunchyroll/`              |
 | Windows | `C:\ProgramData\Jellyfin\Server\plugins\Crunchyroll\` |
-| macOS | `~/.local/share/jellyfin/plugins/Crunchyroll/` |
-| Docker | `/config/plugins/Crunchyroll/` |
+| macOS   | `~/.local/share/jellyfin/plugins/Crunchyroll/`        |
+| Docker  | `/config/plugins/Crunchyroll/`                        |
 
 > Crie a pasta `Crunchyroll` caso ela não exista.
 
@@ -121,6 +141,14 @@ Dashboard > Plugins > Crunchyroll Metadata
 
 - **Idioma Preferido**: Idioma principal dos metadados
 - **Idioma de Fallback**: Utilizado quando o idioma preferido não está disponível
+
+### FlareSolverr (Obrigatório)
+
+- **URL do FlareSolverr**: URL da instância do FlareSolverr (padrão: `http://localhost:8191`)
+- **Nome do Container Docker**: Nome do container Docker do FlareSolverr (padrão: `flaresolverr`)
+- **URL do Chrome CDP**: _(Avançado)_ Sobrescreve a URL do Chrome DevTools Protocol. Deixe vazio para detecção automática.
+
+> 📖 Veja **[FLARESOLVERR.md](FLARESOLVERR.md)** para instruções detalhadas de configuração.
 
 ### Mapeamento de Temporadas e Episódios
 

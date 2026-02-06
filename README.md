@@ -20,6 +20,26 @@ A Jellyfin metadata plugin that fetches anime metadata directly from Crunchyroll
 
 ---
 
+## 🔥 FlareSolverr Required
+
+> **⚠️ Since v2.0.0, FlareSolverr is required for this plugin to work.**
+
+Crunchyroll is now protected by Cloudflare, which blocks all direct API requests. This plugin uses **Chrome DevTools Protocol (CDP)** inside FlareSolverr's browser to bypass Cloudflare and fetch metadata.
+
+Without FlareSolverr running, the plugin **will not be able to retrieve any metadata**.
+
+📖 **[FlareSolverr Installation & Configuration Guide](FLARESOLVERR.md)**
+
+**Quick start:**
+
+```bash
+docker run -d --name flaresolverr -p 8191:8191 ghcr.io/flaresolverr/flaresolverr:latest
+```
+
+Then configure the plugin with the FlareSolverr URL (`http://localhost:8191`) and Docker container name (`flaresolverr`) in the plugin settings.
+
+---
+
 ## 🎯 Problems This Plugin Solves
 
 ### Split Seasons (AniDB-style behavior)
@@ -78,12 +98,12 @@ docker restart jellyfin
 1. Download `Jellyfin.Plugin.Crunchyroll.zip` from the Releases page
 2. Extract the files to the appropriate plugins directory:
 
-| OS | Path |
-|----|------|
-| Linux | `/var/lib/jellyfin/plugins/Crunchyroll/` |
+| OS      | Path                                                  |
+| ------- | ----------------------------------------------------- |
+| Linux   | `/var/lib/jellyfin/plugins/Crunchyroll/`              |
 | Windows | `C:\ProgramData\Jellyfin\Server\plugins\Crunchyroll\` |
-| macOS | `~/.local/share/jellyfin/plugins/Crunchyroll/` |
-| Docker | `/config/plugins/Crunchyroll/` |
+| macOS   | `~/.local/share/jellyfin/plugins/Crunchyroll/`        |
+| Docker  | `/config/plugins/Crunchyroll/`                        |
 
 > Create the `Crunchyroll` folder if it does not exist.
 
@@ -121,6 +141,14 @@ Dashboard > Plugins > Crunchyroll Metadata
 
 - **Preferred Language**: Primary metadata language
 - **Fallback Language**: Used when the preferred language is unavailable
+
+### FlareSolverr (Required)
+
+- **FlareSolverr URL**: URL of the FlareSolverr instance (default: `http://localhost:8191`)
+- **Docker Container Name**: Name of the FlareSolverr Docker container (default: `flaresolverr`)
+- **Chrome CDP URL**: _(Advanced)_ Override the Chrome DevTools Protocol URL. Leave empty for auto-detection.
+
+> 📖 See **[FLARESOLVERR.md](FLARESOLVERR.md)** for detailed setup instructions.
 
 ### Season & Episode Mapping
 
@@ -216,6 +244,7 @@ Jellyfin reads the plugin version from the **compiled .NET assembly**, not from 
 - `manifest.json` provides version history for updates and changelog display (but not the displayed version)
 
 If the plugin shows as `1.0.0.0` in Jellyfin:
+
 1. Check that the assembly was built with the correct `-p:Version=X.X.X.0` parameter
 2. Verify the `.csproj` has explicit version properties as a fallback
 

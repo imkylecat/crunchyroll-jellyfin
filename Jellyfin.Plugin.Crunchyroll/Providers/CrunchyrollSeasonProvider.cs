@@ -47,7 +47,8 @@ public class CrunchyrollSeasonProvider : IRemoteMetadataProvider<Season, SeasonI
         var username = config?.Username;
         var password = config?.Password;
         var dockerContainerName = config?.DockerContainerName;
-        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password, dockerContainerName);
+        var chromeCdpUrl = config?.ChromeCdpUrl;
+        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password, dockerContainerName, chromeCdpUrl);
         int SeasonNumber = info.IndexNumber ?? 1;
 
         // Get series ID from parent
@@ -79,7 +80,7 @@ public class CrunchyrollSeasonProvider : IRemoteMetadataProvider<Season, SeasonI
 
             using var fallbackHttpClient = _httpClientFactory.CreateClient();
             using var fallbackApiClient = new CrunchyrollApiClient(
-                fallbackHttpClient, _logger, fallbackLocale, flareSolverrUrl, username, password, dockerContainerName);
+                fallbackHttpClient, _logger, fallbackLocale, flareSolverrUrl, username, password, dockerContainerName, chromeCdpUrl);
 
             var fallbackSeasons = await fallbackApiClient.GetSeasonsAsync(parentSeriesId, cancellationToken)
                 .ConfigureAwait(false);
@@ -122,7 +123,8 @@ public class CrunchyrollSeasonProvider : IRemoteMetadataProvider<Season, SeasonI
         var username = config?.Username;
         var password = config?.Password;
         var dockerContainerName = config?.DockerContainerName;
-        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password, dockerContainerName);
+        var chromeCdpUrl = config?.ChromeCdpUrl;
+        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password, dockerContainerName, chromeCdpUrl);
 
         var seasons = await apiClient.GetSeasonsAsync(seriesId, cancellationToken).ConfigureAwait(false);
 
@@ -201,13 +203,34 @@ public class CrunchyrollSeasonProvider : IRemoteMetadataProvider<Season, SeasonI
             preferredSeasons = seasons;
         }
 
-        // Match by SeasonNumber directly (not by position!)
+        // Match by SeasonSequenceNumber directly (not by position!)
         // This fixes Issue #2: Jellyfin S2 -> Crunchyroll S2, even if S1 is missing
         var matchedSeason = preferredSeasons.FirstOrDefault(s => s.SeasonSequenceNumber == jellyfinSeasonNumber);
 
         if (matchedSeason != null)
         {
             return matchedSeason;
+        }
+
+        // Also try matching by SeasonNumber (some series use this instead of SeasonSequenceNumber)
+        matchedSeason = preferredSeasons.FirstOrDefault(s => s.SeasonNumber == jellyfinSeasonNumber);
+        if (matchedSeason != null)
+        {
+            _logger.LogDebug(
+                "Matched Season {JellyfinSeason} via SeasonNumber (not SeasonSequenceNumber) to: {Title}",
+                jellyfinSeasonNumber, matchedSeason.Title);
+            return matchedSeason;
+        }
+
+        // If there's only one season and Jellyfin asks for Season 1, use it regardless of numbering
+        // This handles single-season series where Crunchyroll sets SeasonSequenceNumber = 0
+        if (jellyfinSeasonNumber == 1 && preferredSeasons.Count == 1)
+        {
+            _logger.LogDebug(
+                "Single season available (SeqNum={SeqNum}, Num={Num}), using it for Jellyfin Season 1: {Title}",
+                preferredSeasons[0].SeasonSequenceNumber, preferredSeasons[0].SeasonNumber,
+                preferredSeasons[0].Title);
+            return preferredSeasons[0];
         }
 
         // For Season 0 (Specials), check for OADs, OVAs, Specials, Movies

@@ -35,6 +35,7 @@ public class CrunchyrollApiClient : IDisposable
     private readonly string _username;
     private readonly string _password;
     private readonly string _dockerContainerName;
+    private readonly string _chromeCdpUrl;
     private bool _disposed;
     private static bool _useScrapingMode;
     private static bool _cfCookiesApplied;
@@ -70,7 +71,7 @@ public class CrunchyrollApiClient : IDisposable
     /// <param name="flareSolverrUrl">Optional FlareSolverr URL for bypassing Cloudflare.</param>
     /// <param name="username">Optional username/email for login.</param>
     /// <param name="password">Optional password for login.</param>
-    public CrunchyrollApiClient(HttpClient httpClient, ILogger logger, string locale = "pt-BR", string? flareSolverrUrl = null, string? username = null, string? password = null, string? dockerContainerName = null)
+    public CrunchyrollApiClient(HttpClient httpClient, ILogger logger, string locale = "pt-BR", string? flareSolverrUrl = null, string? username = null, string? password = null, string? dockerContainerName = null, string? chromeCdpUrl = null)
     {
         _httpClient = httpClient;
         _logger = logger;
@@ -78,6 +79,7 @@ public class CrunchyrollApiClient : IDisposable
         _username = username ?? string.Empty;
         _password = password ?? string.Empty;
         _dockerContainerName = dockerContainerName ?? "flaresolverr";
+        _chromeCdpUrl = chromeCdpUrl ?? string.Empty;
 
         _httpClient.DefaultRequestHeaders.Clear();
         _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", UserAgent);
@@ -87,8 +89,12 @@ public class CrunchyrollApiClient : IDisposable
         // Initialize FlareSolverr client if URL is provided
         if (!string.IsNullOrWhiteSpace(flareSolverrUrl))
         {
-            _flareSolverrClient = new FlareSolverrClient(new HttpClient(), logger, flareSolverrUrl);
+            _flareSolverrClient = new FlareSolverrClient(new HttpClient(), logger, flareSolverrUrl, chromeCdpUrl);
             _logger.LogDebug("FlareSolverr configured at: {Url}", flareSolverrUrl);
+            if (!string.IsNullOrWhiteSpace(chromeCdpUrl))
+            {
+                _logger.LogInformation("Chrome CDP direct connection configured at: {CdpUrl}", chromeCdpUrl);
+            }
         }
     }
 
@@ -96,8 +102,8 @@ public class CrunchyrollApiClient : IDisposable
     /// Creates a CrunchyrollApiClient with a dedicated HttpClientHandler for cookie support.
     /// Use this constructor when Cloudflare bypass via cookies is needed.
     /// </summary>
-    public CrunchyrollApiClient(HttpClientHandler handler, ILogger logger, string locale = "pt-BR", string? flareSolverrUrl = null, string? username = null, string? password = null, string? dockerContainerName = null)
-        : this(new HttpClient(handler, disposeHandler: false), logger, locale, flareSolverrUrl, username, password, dockerContainerName)
+    public CrunchyrollApiClient(HttpClientHandler handler, ILogger logger, string locale = "pt-BR", string? flareSolverrUrl = null, string? username = null, string? password = null, string? dockerContainerName = null, string? chromeCdpUrl = null)
+        : this(new HttpClient(handler, disposeHandler: false), logger, locale, flareSolverrUrl, username, password, dockerContainerName, chromeCdpUrl)
     {
         _httpClientHandler = handler;
     }
@@ -693,7 +699,7 @@ public class CrunchyrollApiClient : IDisposable
     {
         try
         {
-            // If in scraping mode, try cache first
+            // If in scraping mode, try cache first, then CDP proxy
             if (_useScrapingMode)
             {
                 lock (_scrapingCacheLock)
@@ -703,14 +709,25 @@ public class CrunchyrollApiClient : IDisposable
                         _logger.LogInformation("[Scraping Cache] Hit for episodes of season {SeasonId}, returning {Count} episodes", seasonId, cachedEpisodes.Count);
                         return cachedEpisodes;
                     }
-                    
-                    // Log available keys for debugging
-                    var availableKeys = string.Join(", ", _scrapedEpisodesCache.Keys);
-                    _logger.LogWarning("[Scraping Cache] Miss for season {SeasonId}. Available keys: [{Keys}]", seasonId, availableKeys);
                 }
-                
-                // If not in cache but in scraping mode, we can't do much because we need seriesId to scrape
-                _logger.LogWarning("Scraping mode active but no cached episodes found for season {SeasonId}. Ensure GetSeasons was called first.", seasonId);
+
+                // Cache miss — try fetching episodes via CDP API proxy (same as seasons do)
+                if (HasFlareSolverr)
+                {
+                    _logger.LogInformation("[CDP Proxy] Fetching episodes for season {SeasonId} (scraping mode, cache miss)", seasonId);
+                    var proxyResult = await TryGetEpisodesViaApiProxyAsync(seasonId, cancellationToken).ConfigureAwait(false);
+                    if (proxyResult != null && proxyResult.Count > 0)
+                    {
+                        lock (_scrapingCacheLock)
+                        {
+                            _scrapedEpisodesCache[seasonId] = proxyResult;
+                        }
+                        _logger.LogInformation("[CDP Proxy] Got {Count} episodes for season {SeasonId}", proxyResult.Count, seasonId);
+                        return proxyResult;
+                    }
+                }
+
+                _logger.LogWarning("No episodes found for season {SeasonId} via cache or CDP proxy.", seasonId);
                 return new List<CrunchyrollEpisode>();
             }
 
@@ -1008,6 +1025,14 @@ public class CrunchyrollApiClient : IDisposable
             {
                 _logger.LogInformation("[CDP Proxy] Got {Count} seasons for series {SeriesId}",
                     response.Data.Count, seriesId);
+                foreach (var s in response.Data)
+                {
+                    _logger.LogInformation(
+                        "[CDP Proxy] Season: Id={Id}, Title={Title}, SeasonNumber={SeasonNumber}, SeasonSequenceNumber={SeqNum}, AudioLocales={Audio}, NumberOfEpisodes={EpCount}",
+                        s.Id, s.Title, s.SeasonNumber, s.SeasonSequenceNumber,
+                        s.AudioLocales != null ? string.Join(",", s.AudioLocales) : "null",
+                        s.NumberOfEpisodes);
+                }
                 return response.Data;
             }
 

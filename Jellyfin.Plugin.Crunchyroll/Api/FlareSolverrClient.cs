@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -18,6 +19,7 @@ public class FlareSolverrClient : IDisposable
     private readonly HttpClient _httpClient;
     private readonly ILogger _logger;
     private readonly string _flareSolverrUrl;
+    private readonly string? _chromeCdpUrl;
     private bool _disposed;
 
     // Session management for persistent browser instances
@@ -36,17 +38,87 @@ public class FlareSolverrClient : IDisposable
     /// <param name="httpClient">The HTTP client.</param>
     /// <param name="logger">The logger.</param>
     /// <param name="flareSolverrUrl">The FlareSolverr base URL (e.g., http://localhost:8191).</param>
-    public FlareSolverrClient(HttpClient httpClient, ILogger logger, string flareSolverrUrl)
+    /// <param name="chromeCdpUrl">Optional Chrome CDP URL for direct WebSocket connection (e.g., http://localhost:9222).</param>
+    public FlareSolverrClient(HttpClient httpClient, ILogger logger, string flareSolverrUrl, string? chromeCdpUrl = null)
     {
         _httpClient = httpClient;
         _logger = logger;
         _flareSolverrUrl = flareSolverrUrl.TrimEnd('/');
+        _chromeCdpUrl = string.IsNullOrWhiteSpace(chromeCdpUrl) ? null : chromeCdpUrl.TrimEnd('/');
     }
 
     /// <summary>
     /// Gets a value indicating whether FlareSolverr is configured.
     /// </summary>
     public bool IsConfigured => !string.IsNullOrWhiteSpace(_flareSolverrUrl);
+
+    /// <summary>
+    /// Gets a value indicating whether direct Chrome CDP WebSocket connection is configured.
+    /// </summary>
+    public bool HasDirectCdp => !string.IsNullOrWhiteSpace(_chromeCdpUrl);
+
+    // Track whether we have an active FlareSolverr session keeping Chrome alive for CDP
+    private static bool _cdpSessionActive;
+    private static string? _cdpSessionId;
+    private static readonly SemaphoreSlim _cdpSessionLock = new(1, 1);
+
+    /// <summary>
+    /// Ensures Chrome is running inside FlareSolverr by creating a persistent session.
+    /// FlareSolverr v3.x kills Chrome after each request unless a session is active.
+    /// This method creates a session (which starts Chrome) and navigates to crunchyroll.com
+    /// so that subsequent CDP calls can find Chrome and execute fetch() on the right origin.
+    /// </summary>
+    private async Task EnsureBrowserAliveAsync(CancellationToken cancellationToken)
+    {
+        if (_cdpSessionActive && _cdpSessionId != null)
+        {
+            return; // Session already exists, Chrome should be running
+        }
+
+        await _cdpSessionLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_cdpSessionActive && _cdpSessionId != null)
+            {
+                return; // Double-check after lock
+            }
+
+            _cdpSessionId = $"cdp_{Guid.NewGuid():N}"[..16];
+            _logger.LogInformation("[CDP Session] Creating FlareSolverr session '{SessionId}' to keep Chrome alive...", _cdpSessionId);
+
+            // Create session by making a request with session parameter.
+            // This starts Chrome and keeps it alive for the duration of the session.
+            var request = new FlareSolverrRequest
+            {
+                Cmd = "request.get",
+                Url = "https://www.crunchyroll.com/",
+                Session = _cdpSessionId,
+                MaxTimeout = 60000,
+                Wait = 5000
+            };
+
+            var response = await _httpClient.PostAsJsonAsync(
+                $"{_flareSolverrUrl}/v1", request, cancellationToken).ConfigureAwait(false);
+
+            if (response.IsSuccessStatusCode)
+            {
+                _cdpSessionActive = true;
+                _logger.LogInformation("[CDP Session] Session created. Chrome is now running and on crunchyroll.com.");
+            }
+            else
+            {
+                _logger.LogWarning("[CDP Session] Failed to create session: HTTP {StatusCode}", response.StatusCode);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[CDP Session] Error creating browser session");
+        }
+        finally
+        {
+            _cdpSessionLock.Release();
+        }
+    }
 
     /// <summary>
     /// Obtains Cloudflare bypass cookies and user-agent by visiting Crunchyroll through FlareSolverr.
@@ -613,6 +685,285 @@ print(v)
         }
     }
 
+    // ===== Direct WebSocket CDP Methods =====
+    // These methods connect directly to Chrome's CDP WebSocket from C#,
+    // eliminating the need for docker exec + Python. Requires the Chrome CDP
+    // port to be accessible from the Jellyfin host (e.g., FlareSolverr with --network=host).
+
+    /// <summary>
+    /// CDP page info returned by the /json/list endpoint.
+    /// </summary>
+    private sealed class CdpPageInfo
+    {
+        [JsonPropertyName("url")]
+        public string? Url { get; set; }
+
+        [JsonPropertyName("webSocketDebuggerUrl")]
+        public string? WebSocketDebuggerUrl { get; set; }
+
+        [JsonPropertyName("title")]
+        public string? Title { get; set; }
+
+        [JsonPropertyName("type")]
+        public string? Type { get; set; }
+    }
+
+    /// <summary>
+    /// Executes a JavaScript expression inside Chrome via direct WebSocket CDP connection.
+    /// This bypasses docker exec entirely — connects directly to Chrome's CDP port.
+    /// </summary>
+    /// <param name="jsExpression">The JavaScript expression to evaluate (async IIFE returning a string).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The string result from the JS expression, or null if failed.</returns>
+    private async Task<string?> ExecuteJsViaCdpDirectAsync(string jsExpression, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(_chromeCdpUrl))
+        {
+            return null;
+        }
+
+        try
+        {
+            _logger.LogDebug("[CDP Direct] Connecting to Chrome CDP at {Url}...", _chromeCdpUrl);
+
+            // Step 1: Discover pages via CDP HTTP endpoint
+            string pagesJson;
+            try
+            {
+                pagesJson = await _httpClient.GetStringAsync($"{_chromeCdpUrl}/json/list", cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[CDP Direct] Cannot reach Chrome CDP at {Url}/json/list", _chromeCdpUrl);
+                return null;
+            }
+
+            var pages = JsonSerializer.Deserialize<List<CdpPageInfo>>(pagesJson);
+            if (pages == null || pages.Count == 0)
+            {
+                _logger.LogWarning("[CDP Direct] No pages found at {Url}", _chromeCdpUrl);
+                return null;
+            }
+
+            // Find a page with crunchyroll in the URL, or use the first page
+            string? wsUrl = null;
+            foreach (var page in pages)
+            {
+                if (page.Url?.Contains("crunchyroll", StringComparison.OrdinalIgnoreCase) == true
+                    && !string.IsNullOrEmpty(page.WebSocketDebuggerUrl))
+                {
+                    wsUrl = page.WebSocketDebuggerUrl;
+                    _logger.LogDebug("[CDP Direct] Found Crunchyroll page: {Url}", page.Url);
+                    break;
+                }
+            }
+
+            if (wsUrl == null)
+            {
+                var firstPage = pages.FirstOrDefault(p => !string.IsNullOrEmpty(p.WebSocketDebuggerUrl));
+                wsUrl = firstPage?.WebSocketDebuggerUrl;
+                if (firstPage != null)
+                {
+                    _logger.LogDebug("[CDP Direct] Using first available page: {Url}", firstPage.Url);
+                }
+            }
+
+            if (string.IsNullOrEmpty(wsUrl))
+            {
+                _logger.LogWarning("[CDP Direct] No webSocketDebuggerUrl found in any page");
+                return null;
+            }
+
+            // Replace internal 127.0.0.1 address with the external CDP host
+            var cdpUri = new Uri(_chromeCdpUrl);
+            wsUrl = Regex.Replace(wsUrl, @"ws://[^/]+", $"ws://{cdpUri.Host}:{cdpUri.Port}");
+
+            _logger.LogDebug("[CDP Direct] Connecting to WebSocket: {WsUrl}", wsUrl);
+
+            // Step 2: Connect via WebSocket
+            using var ws = new ClientWebSocket();
+            using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            connectCts.CancelAfter(TimeSpan.FromSeconds(10));
+            await ws.ConnectAsync(new Uri(wsUrl), connectCts.Token).ConfigureAwait(false);
+
+            int msgId = 1;
+
+            // Step 3: Check if we're on crunchyroll.com
+            var hostname = await CdpEvaluateStringAsync(ws, "window.location.hostname", msgId++, cancellationToken).ConfigureAwait(false);
+
+            if (string.IsNullOrEmpty(hostname) || !hostname.Contains("crunchyroll", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogDebug("[CDP Direct] Not on crunchyroll.com (hostname={Host}), navigating...", hostname);
+
+                // Navigate to crunchyroll.com
+                var navMsg = JsonSerializer.Serialize(new
+                {
+                    id = msgId++,
+                    method = "Page.navigate",
+                    @params = new { url = "https://www.crunchyroll.com/" }
+                });
+                await CdpSendAsync(ws, navMsg, cancellationToken).ConfigureAwait(false);
+                await CdpReceiveResponseAsync(ws, msgId - 1, cancellationToken).ConfigureAwait(false);
+
+                // Wait for page to load
+                await Task.Delay(5000, cancellationToken).ConfigureAwait(false);
+            }
+
+            // Step 4: Execute the JavaScript expression
+            _logger.LogDebug("[CDP Direct] Evaluating JS expression ({Length} chars)", jsExpression.Length);
+            var result = await CdpEvaluateStringAsync(ws, jsExpression, msgId++, cancellationToken, awaitPromise: true).ConfigureAwait(false);
+
+            // Step 5: Close cleanly
+            try
+            {
+                if (ws.State == WebSocketState.Open)
+                {
+                    await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", CancellationToken.None).ConfigureAwait(false);
+                }
+            }
+            catch
+            {
+                // Ignore close errors
+            }
+
+            if (string.IsNullOrEmpty(result))
+            {
+                _logger.LogWarning("[CDP Direct] Empty result from JS evaluation");
+                return null;
+            }
+
+            _logger.LogDebug("[CDP Direct] Got result ({Length} chars)", result.Length);
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[CDP Direct] Error connecting to Chrome CDP at {Url}", _chromeCdpUrl);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Sends a Runtime.evaluate command and returns the string value of the result.
+    /// </summary>
+    private async Task<string?> CdpEvaluateStringAsync(
+        ClientWebSocket ws,
+        string expression,
+        int msgId,
+        CancellationToken cancellationToken,
+        bool awaitPromise = false)
+    {
+        var msg = JsonSerializer.Serialize(new
+        {
+            id = msgId,
+            method = "Runtime.evaluate",
+            @params = new
+            {
+                expression,
+                returnByValue = true,
+                awaitPromise
+            }
+        });
+
+        await CdpSendAsync(ws, msg, cancellationToken).ConfigureAwait(false);
+        var response = await CdpReceiveResponseAsync(ws, msgId, cancellationToken).ConfigureAwait(false);
+
+        // Parse response: {"id":N,"result":{"result":{"type":"string","value":"..."}}}
+        try
+        {
+            using var doc = JsonDocument.Parse(response);
+
+            // Check for errors
+            if (doc.RootElement.TryGetProperty("result", out var resultProp))
+            {
+                if (resultProp.TryGetProperty("exceptionDetails", out var exDetails))
+                {
+                    _logger.LogWarning("[CDP Direct] JS exception: {Details}",
+                        exDetails.GetRawText().Length > 300 ? exDetails.GetRawText()[..300] : exDetails.GetRawText());
+                    return null;
+                }
+
+                if (resultProp.TryGetProperty("result", out var innerResult))
+                {
+                    if (innerResult.TryGetProperty("value", out var valueProp))
+                    {
+                        return valueProp.ValueKind == JsonValueKind.String
+                            ? valueProp.GetString()
+                            : valueProp.GetRawText();
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[CDP Direct] Could not parse evaluate response: {Response}",
+                response.Length > 200 ? response[..200] : response);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Sends a message over the CDP WebSocket.
+    /// </summary>
+    private static async Task CdpSendAsync(ClientWebSocket ws, string message, CancellationToken cancellationToken)
+    {
+        var bytes = Encoding.UTF8.GetBytes(message);
+        await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Receives a single complete WebSocket message.
+    /// </summary>
+    private static async Task<string> CdpReceiveMessageAsync(ClientWebSocket ws, CancellationToken cancellationToken)
+    {
+        var buffer = new byte[8192];
+        var sb = new StringBuilder();
+
+        WebSocketReceiveResult result;
+        do
+        {
+            result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken).ConfigureAwait(false);
+            sb.Append(Encoding.UTF8.GetString(buffer, 0, result.Count));
+        }
+        while (!result.EndOfMessage);
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Receives CDP messages until one with the expected command ID is found.
+    /// Discards any events or responses with different IDs.
+    /// </summary>
+    private async Task<string> CdpReceiveResponseAsync(ClientWebSocket ws, int expectedId, CancellationToken cancellationToken)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(45));
+
+        while (true)
+        {
+            var message = await CdpReceiveMessageAsync(ws, timeoutCts.Token).ConfigureAwait(false);
+
+            try
+            {
+                using var doc = JsonDocument.Parse(message);
+                if (doc.RootElement.TryGetProperty("id", out var idProp) && idProp.GetInt32() == expectedId)
+                {
+                    return message;
+                }
+
+                // It's an event or response to a different command — skip
+            }
+            catch
+            {
+                // Not valid JSON — skip
+            }
+        }
+    }
+
     // Generic Python script for executing arbitrary JavaScript via Chrome DevTools Protocol.
     // Accepts the JS expression as a base64-encoded command-line argument (sys.argv[1]).
     // The script discovers Chrome's CDP port, connects via websocket, ensures we're on
@@ -666,21 +1017,43 @@ print(v)
 ";
 
     /// <summary>
-    /// Executes a JavaScript expression inside Chrome via CDP (Chrome DevTools Protocol)
-    /// by running a Python script inside the FlareSolverr Docker container.
+    /// Executes a JavaScript expression inside Chrome via CDP (Chrome DevTools Protocol).
+    /// First tries direct WebSocket connection (if ChromeCdpUrl is configured), then falls
+    /// back to running a Python script inside the FlareSolverr Docker container via docker exec.
     /// The JS expression must return a string value (use JSON.stringify for objects).
     /// This is the low-level method used by <see cref="CdpFetchJsonAsync"/> and can also
     /// be called directly for custom JavaScript execution.
     /// </summary>
-    /// <param name="dockerContainerName">The Docker container name/ID of FlareSolverr.</param>
+    /// <param name="dockerContainerName">The Docker container name/ID of FlareSolverr (for docker exec fallback).</param>
     /// <param name="jsExpression">The JavaScript expression to evaluate (must be an async IIFE that returns a string).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The string result from the JS expression, or null if failed.</returns>
     public async Task<string?> ExecuteCdpJsAsync(string dockerContainerName, string jsExpression, CancellationToken cancellationToken = default)
     {
+        // Ensure Chrome is running inside FlareSolverr before trying CDP.
+        // FlareSolverr v3.x kills Chrome after each request unless a session is active.
+        if (IsConfigured)
+        {
+            await EnsureBrowserAliveAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        // Strategy 1: Direct WebSocket CDP connection (no Docker access needed)
+        if (!string.IsNullOrWhiteSpace(_chromeCdpUrl))
+        {
+            _logger.LogDebug("[CDP] Trying direct WebSocket connection to {Url}...", _chromeCdpUrl);
+            var directResult = await ExecuteJsViaCdpDirectAsync(jsExpression, cancellationToken).ConfigureAwait(false);
+            if (directResult != null)
+            {
+                return directResult;
+            }
+
+            _logger.LogWarning("[CDP] Direct WebSocket failed, falling back to docker exec...");
+        }
+
+        // Strategy 2: Docker exec + Python (requires Docker socket access)
         if (string.IsNullOrWhiteSpace(dockerContainerName))
         {
-            _logger.LogDebug("[CDP] Docker container name not configured");
+            _logger.LogDebug("[CDP] Docker container name not configured and direct CDP failed");
             return null;
         }
 
@@ -854,6 +1227,31 @@ print(v)
     /// </summary>
     public async Task DestroySessionAsync(CancellationToken cancellationToken = default)
     {
+        // Use a fresh timeout so destroy works even if the caller's token is already cancelled
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var token = cts.Token;
+
+        // Destroy the CDP session (keeps Chrome alive for CDP operations)
+        if (_cdpSessionId != null)
+        {
+            try
+            {
+                var cdpRequest = new { cmd = "sessions.destroy", session = _cdpSessionId };
+                await _httpClient.PostAsJsonAsync($"{_flareSolverrUrl}/v1", cdpRequest, token).ConfigureAwait(false);
+                _logger.LogDebug("[FlareSolverr] Destroyed CDP session: {SessionId}", _cdpSessionId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[FlareSolverr] CDP session cleanup skipped (will expire on its own)");
+            }
+            finally
+            {
+                _cdpSessionId = null;
+                _cdpSessionActive = false;
+            }
+        }
+
+        // Destroy the regular scraping session
         if (_sessionId == null)
         {
             return;
@@ -862,12 +1260,12 @@ print(v)
         try
         {
             var request = new { cmd = "sessions.destroy", session = _sessionId };
-            await _httpClient.PostAsJsonAsync($"{_flareSolverrUrl}/v1", request, cancellationToken).ConfigureAwait(false);
+            await _httpClient.PostAsJsonAsync($"{_flareSolverrUrl}/v1", request, token).ConfigureAwait(false);
             _logger.LogDebug("[FlareSolverr] Destroyed session: {SessionId}", _sessionId);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "[FlareSolverr] Failed to destroy session");
+            _logger.LogDebug(ex, "[FlareSolverr] Session cleanup skipped (will expire on its own)");
         }
         finally
         {
@@ -905,16 +1303,16 @@ print(v)
 
         if (disposing)
         {
-            // Try to clean up session (fire-and-forget)
-            if (_sessionId != null)
+            // Try to clean up sessions before disposing HttpClient
+            if (_sessionId != null || _cdpSessionId != null)
             {
                 try
                 {
-                    _ = DestroySessionAsync(CancellationToken.None);
+                    DestroySessionAsync(CancellationToken.None).GetAwaiter().GetResult();
                 }
                 catch
                 {
-                    // Ignore cleanup errors
+                    // Ignore cleanup errors — sessions expire on their own
                 }
             }
 
