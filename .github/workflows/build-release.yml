@@ -125,19 +125,38 @@ jobs:
         VERSION=${{ steps.version.outputs.version }}
         CHECKSUM=${{ steps.checksum.outputs.checksum }}
         TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        SOURCE_URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/Jellyfin.Plugin.Crunchyroll.zip"
         
-        # Prepend new version to the versions array (preserves history)
-        jq --arg version "$FULL_VERSION" \
-           --arg checksum "$CHECKSUM" \
-           --arg timestamp "$TIMESTAMP" \
-           --arg sourceUrl "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/Jellyfin.Plugin.Crunchyroll.zip" \
-           '.[0].versions = [{
-              version: $version,
-              changelog: "See GitHub release notes",
-              checksum: $checksum,
-              timestamp: $timestamp,
-              sourceUrl: $sourceUrl
-            }] + .[0].versions' manifest.json > manifest_updated.json
+        # Check if an entry for this version already exists in manifest.json
+        EXISTING=$(jq --arg version "$FULL_VERSION" '[.[0].versions[] | select(.version == $version)] | length' manifest.json)
+        
+        if [ "$EXISTING" -gt "0" ]; then
+          echo "Version $FULL_VERSION already exists in manifest — updating checksum and timestamp only (preserving changelog)"
+          jq --arg version "$FULL_VERSION" \
+             --arg checksum "$CHECKSUM" \
+             --arg timestamp "$TIMESTAMP" \
+             --arg sourceUrl "$SOURCE_URL" \
+             '.[0].versions = [.[0].versions[] |
+                if .version == $version then
+                  .checksum = $checksum |
+                  .timestamp = $timestamp |
+                  .sourceUrl = $sourceUrl
+                else . end
+             ]' manifest.json > manifest_updated.json
+        else
+          echo "Version $FULL_VERSION not found in manifest — adding new entry"
+          jq --arg version "$FULL_VERSION" \
+             --arg checksum "$CHECKSUM" \
+             --arg timestamp "$TIMESTAMP" \
+             --arg sourceUrl "$SOURCE_URL" \
+             '.[0].versions = [{
+                version: $version,
+                changelog: "See GitHub release notes",
+                checksum: $checksum,
+                timestamp: $timestamp,
+                sourceUrl: $sourceUrl
+              }] + .[0].versions' manifest.json > manifest_updated.json
+        fi
         
         mv manifest_updated.json manifest.json
         cat manifest.json
