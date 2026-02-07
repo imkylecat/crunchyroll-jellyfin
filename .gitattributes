@@ -1,0 +1,6 @@
+# Mark ScraperTest HTML files as generated so GitHub Linguist ignores them
+# in language statistics (they are Crunchyroll page dumps, not project code)
+ScraperTest/*.html linguist-generated=true
+
+# Mark config page as vendored (it's plugin UI, not the main language)
+Jellyfin.Plugin.Crunchyroll/Configuration/configPage.html linguist-vendored=true
