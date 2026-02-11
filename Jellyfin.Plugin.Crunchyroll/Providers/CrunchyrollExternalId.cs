@@ -1,3 +1,4 @@
+using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Providers;
 using MediaBrowser.Model.Entities;
@@ -74,5 +75,29 @@ public class CrunchyrollEpisodeExternalId : IExternalId
     public bool Supports(IHasProviderIds item)
     {
         return item is Episode;
+    }
+}
+
+/// <summary>
+/// External ID provider for Crunchyroll movies.
+/// </summary>
+public class CrunchyrollMovieExternalId : IExternalId
+{
+    /// <inheritdoc />
+    public string ProviderName => "Crunchyroll";
+
+    /// <inheritdoc />
+    public string Key => "CrunchyrollMovie";
+
+    /// <inheritdoc />
+    public ExternalIdMediaType? Type => ExternalIdMediaType.Movie;
+
+    /// <inheritdoc />
+    public string? UrlFormatString => "https://www.crunchyroll.com/series/{0}";
+
+    /// <inheritdoc />
+    public bool Supports(IHasProviderIds item)
+    {
+        return item is Movie;
     }
 }

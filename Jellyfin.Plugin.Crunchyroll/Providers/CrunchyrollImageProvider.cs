@@ -1,6 +1,7 @@
 using Jellyfin.Plugin.Crunchyroll.Api;
 using Jellyfin.Plugin.Crunchyroll.Models;
 using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Providers;
 using MediaBrowser.Model.Entities;
@@ -246,5 +247,136 @@ public class CrunchyrollEpisodeImageProvider : IRemoteImageProvider, IHasOrder
     public Task<HttpResponseMessage> GetImageResponse(string url, CancellationToken cancellationToken)
     {
         return _httpClientFactory.CreateClient().GetAsync(new Uri(url), cancellationToken);
+    }
+}
+
+/// <summary>
+/// Image provider for anime movies from Crunchyroll.
+/// Uses the same series images since movies on CR are stored as series.
+/// </summary>
+public class CrunchyrollMovieImageProvider : IRemoteImageProvider, IHasOrder
+{
+    private readonly ILogger<CrunchyrollMovieImageProvider> _logger;
+    private readonly IHttpClientFactory _httpClientFactory;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="CrunchyrollMovieImageProvider"/> class.
+    /// </summary>
+    /// <param name="logger">The logger instance.</param>
+    /// <param name="httpClientFactory">The HTTP client factory.</param>
+    public CrunchyrollMovieImageProvider(ILogger<CrunchyrollMovieImageProvider> logger, IHttpClientFactory httpClientFactory)
+    {
+        _logger = logger;
+        _httpClientFactory = httpClientFactory;
+    }
+
+    /// <inheritdoc />
+    public string Name => "Crunchyroll";
+
+    /// <inheritdoc />
+    public int Order => 3;
+
+    /// <inheritdoc />
+    public bool Supports(BaseItem item)
+    {
+        return item is Movie;
+    }
+
+    /// <inheritdoc />
+    public IEnumerable<ImageType> GetSupportedImages(BaseItem item)
+    {
+        return new[]
+        {
+            ImageType.Primary,
+            ImageType.Backdrop,
+            ImageType.Banner
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<IEnumerable<RemoteImageInfo>> GetImages(BaseItem item, CancellationToken cancellationToken)
+    {
+        var images = new List<RemoteImageInfo>();
+
+        // Movies store their series ID in both CrunchyrollMovie and Crunchyroll provider IDs
+        string? crunchyrollId = item.GetProviderId("CrunchyrollMovie")
+            ?? item.GetProviderId("Crunchyroll");
+        if (string.IsNullOrEmpty(crunchyrollId))
+        {
+            return images;
+        }
+
+        var config = Plugin.Instance?.Configuration;
+        var locale = config?.PreferredLanguage ?? "pt-BR";
+
+        using var httpClient = _httpClientFactory.CreateClient();
+        var flareSolverrUrl = config?.FlareSolverrUrl;
+        var username = config?.Username;
+        var password = config?.Password;
+        var dockerContainerName = config?.DockerContainerName;
+        var chromeCdpUrl = config?.ChromeCdpUrl;
+        using var apiClient = new CrunchyrollApiClient(httpClient, _logger, locale, flareSolverrUrl, username, password, dockerContainerName, chromeCdpUrl);
+
+        var series = await apiClient.GetSeriesAsync(crunchyrollId, cancellationToken).ConfigureAwait(false);
+        if (series?.Images == null)
+        {
+            return images;
+        }
+
+        // Add poster images (Primary)
+        AddImages(images, series.Images.PosterTall, ImageType.Primary, "Poster");
+
+        // Add backdrop images (wide posters as backdrops)
+        AddImages(images, series.Images.PosterWide, ImageType.Backdrop, "Backdrop");
+
+        // Use wide poster as banner too
+        AddImages(images, series.Images.PosterWide, ImageType.Banner, "Banner");
+
+        _logger.LogDebug("[Movie] Found {Count} images for movie {Name}", images.Count, item.Name);
+
+        return images;
+    }
+
+    /// <inheritdoc />
+    public Task<HttpResponseMessage> GetImageResponse(string url, CancellationToken cancellationToken)
+    {
+        return _httpClientFactory.CreateClient().GetAsync(new Uri(url), cancellationToken);
+    }
+
+    private void AddImages(List<RemoteImageInfo> images, List<List<CrunchyrollImage>>? imageData, ImageType imageType, string prefix)
+    {
+        if (imageData == null || imageData.Count == 0)
+        {
+            return;
+        }
+
+        var imageSet = imageData.FirstOrDefault();
+        if (imageSet == null)
+        {
+            return;
+        }
+
+        var sortedImages = imageSet
+            .Where(i => !string.IsNullOrEmpty(i.Source))
+            .OrderByDescending(i => i.Width * i.Height)
+            .ToList();
+
+        foreach (var img in sortedImages)
+        {
+            if (string.IsNullOrEmpty(img.Source))
+            {
+                continue;
+            }
+
+            images.Add(new RemoteImageInfo
+            {
+                Url = img.Source,
+                Type = imageType,
+                Width = img.Width,
+                Height = img.Height,
+                ProviderName = Name,
+                Language = Plugin.Instance?.Configuration?.PreferredLanguage
+            });
+        }
     }
 }

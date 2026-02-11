@@ -276,7 +276,15 @@ public class CrunchyrollSeriesProvider : IRemoteMetadataProvider<Series, SeriesI
         return name
             .ToLowerInvariant()
             .Replace(":", "")
-            .Replace("-", " ")
+            .Replace("/", " ")
+            .Replace("-", " ")       // U+002D Hyphen-Minus
+            .Replace("\u2010", " ")  // ‐ Hyphen
+            .Replace("\u2011", " ")  // ‑ Non-Breaking Hyphen
+            .Replace("\u2013", " ")  // – En Dash
+            .Replace("\u2014", " ")  // — Em Dash
+            .Replace("(", "")
+            .Replace(")", "")
+            .Replace("  ", " ")
             .Replace("  ", " ")
             .Trim();
     }

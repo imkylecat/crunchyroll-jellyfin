@@ -14,6 +14,20 @@ class ScraperTest
 {
     static async Task Main(string[] args)
     {
+        // Quick movie API test mode
+        if (args.Length > 0 && args[0] == "--movie-test")
+        {
+            await MovieApiTest.RunMovieTest();
+            return;
+        }
+
+        // Movie provider concept test
+        if (args.Length > 0 && args[0] == "--movie-concept")
+        {
+            await MovieProviderConceptTest.RunConceptTest();
+            return;
+        }
+
         Console.WriteLine("=== Crunchyroll HTML Scraper Test Tool ===\n");
         
         string seriesId = args.Length > 0 ? args[0] : "GRDV0019R";  // Default: Jujutsu Kaisen
