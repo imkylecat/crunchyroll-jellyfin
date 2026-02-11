@@ -209,7 +209,65 @@ public class CrunchyrollSeasonProvider : IRemoteMetadataProvider<Season, SeasonI
 
         if (matchedSeason != null)
         {
-            return matchedSeason;
+            // If the match is a Special but Jellyfin is asking for a regular season (S1+),
+            // skip it ONLY if there's an alternative main season with SeasonSequenceNumber=0.
+            // This handles series like Lord El-Melloi II where:
+            //   SeqNum=0 = main season (14 eps), SeqNum=1 = "Special" (1 ep)
+            // Without this, Jellyfin S1 would incorrectly match to the Special.
+            // Safety: only skip if there IS a SeqNum=0 season to fall back to,
+            // otherwise return the match as-is (it might just have "Special" in the name).
+            bool isSpecialMatch = matchedSeason.Title?.Contains("Special", StringComparison.OrdinalIgnoreCase) == true
+                || matchedSeason.Title?.Contains("OVA", StringComparison.OrdinalIgnoreCase) == true
+                || matchedSeason.Title?.Contains("OAD", StringComparison.OrdinalIgnoreCase) == true;
+
+            // Case 1: Jellyfin asks for S1, but SeqNum=1 is a Special with a SeqNum=0 main season.
+            // Skip the Special so we can fall through to the SeqNum=0 fallback below.
+            bool shouldSkipForMainSeason = jellyfinSeasonNumber == 1
+                && isSpecialMatch
+                && preferredSeasons.Any(s => s.SeasonSequenceNumber == 0);
+
+            // Case 2: Jellyfin asks for S0 (Specials), but SeqNum=0 is actually the main season.
+            // Skip it so we can fall through to the Special-detection handler below.
+            bool shouldSkipForSpecials = jellyfinSeasonNumber == 0
+                && !isSpecialMatch
+                && preferredSeasons.Any(s =>
+                    s.Id != matchedSeason.Id
+                    && (s.Title?.Contains("Special", StringComparison.OrdinalIgnoreCase) == true
+                        || s.Title?.Contains("OVA", StringComparison.OrdinalIgnoreCase) == true
+                        || s.Title?.Contains("OAD", StringComparison.OrdinalIgnoreCase) == true
+                        || s.Title?.Contains("Movie", StringComparison.OrdinalIgnoreCase) == true));
+
+            if (!shouldSkipForMainSeason && !shouldSkipForSpecials)
+            {
+                return matchedSeason;
+            }
+
+            if (shouldSkipForMainSeason)
+            {
+                _logger.LogDebug(
+                    "SeasonSequenceNumber={SeqNum} matched a Special season '{Title}', skipping for Jellyfin S{Season} (will use SeqNum=0 fallback)",
+                    jellyfinSeasonNumber, matchedSeason.Title, jellyfinSeasonNumber);
+            }
+            else
+            {
+                _logger.LogDebug(
+                    "SeasonSequenceNumber=0 matched main season '{Title}', skipping for Jellyfin S0 (will use Special-detection fallback)",
+                    matchedSeason.Title);
+            }
+        }
+
+        // When Jellyfin asks for S1 and no direct match was found, also try SeasonSequenceNumber=0
+        // Some series (e.g. Lord El-Melloi II) use SeasonSequenceNumber=0 for the main season
+        if (jellyfinSeasonNumber == 1)
+        {
+            var seqZeroSeason = preferredSeasons.FirstOrDefault(s => s.SeasonSequenceNumber == 0);
+            if (seqZeroSeason != null)
+            {
+                _logger.LogDebug(
+                    "Matched Jellyfin Season 1 to Crunchyroll season with SeasonSequenceNumber=0: {Title}",
+                    seqZeroSeason.Title);
+                return seqZeroSeason;
+            }
         }
 
         // Also try matching by SeasonNumber (some series use this instead of SeasonSequenceNumber)

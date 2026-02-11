@@ -87,7 +87,34 @@ public class EpisodeMappingService
             // but SeasonSequenceNumber gives the actual order (1, 2, 3...).
             // Example: Frieren S1 has season_number=1, season_sequence_number=1
             //          Frieren S2 has season_number=1, season_sequence_number=2
+            //
+            // IMPORTANT: Some series (e.g. Lord El-Melloi II) have SeasonSequenceNumber=0
+            // for the main season. In Jellyfin, S0 is reserved for Specials, so we must
+            // bump SeasonSequenceNumber=0 to S1 for regular (non-special) seasons.
+            // BUT: Only do this if no other regular season already occupies S1,
+            // to avoid collisions when there are two regular seasons (SeqNum=0 and SeqNum=1).
             int jellyfinSeasonNum = season.SeasonSequenceNumber;
+            if (jellyfinSeasonNum == 0)
+            {
+                bool s1AlreadyTaken = sortedSeasons.Any(s =>
+                    s.Id != season.Id
+                    && s.SeasonSequenceNumber == 1
+                    && !IsMovieOrSpecial(s, allEpisodes));
+
+                if (!s1AlreadyTaken)
+                {
+                    jellyfinSeasonNum = 1;
+                    _logger.LogDebug(
+                        "Season '{Title}' has SeasonSequenceNumber=0, remapping to Jellyfin S1 (S0 is reserved for Specials)",
+                        season.Title);
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "Season '{Title}' has SeasonSequenceNumber=0 but S1 is already taken by another regular season. Keeping as S0.",
+                        season.Title);
+                }
+            }
             int episodeOffset = CalculateEpisodeOffset(seasonEpisodes, jellyfinSeasonNum);
 
             var entry = new SeasonMappingEntry
