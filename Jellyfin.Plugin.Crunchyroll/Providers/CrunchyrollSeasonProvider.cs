@@ -216,9 +216,7 @@ public class CrunchyrollSeasonProvider : IRemoteMetadataProvider<Season, SeasonI
             // Without this, Jellyfin S1 would incorrectly match to the Special.
             // Safety: only skip if there IS a SeqNum=0 season to fall back to,
             // otherwise return the match as-is (it might just have "Special" in the name).
-            bool isSpecialMatch = matchedSeason.Title?.Contains("Special", StringComparison.OrdinalIgnoreCase) == true
-                || matchedSeason.Title?.Contains("OVA", StringComparison.OrdinalIgnoreCase) == true
-                || matchedSeason.Title?.Contains("OAD", StringComparison.OrdinalIgnoreCase) == true;
+            bool isSpecialMatch = HasSpecialKeyword(matchedSeason.Title);
 
             // Case 1: Jellyfin asks for S1, but SeqNum=1 is a Special with a SeqNum=0 main season.
             // Skip the Special so we can fall through to the SeqNum=0 fallback below.
@@ -228,14 +226,15 @@ public class CrunchyrollSeasonProvider : IRemoteMetadataProvider<Season, SeasonI
 
             // Case 2: Jellyfin asks for S0 (Specials), but SeqNum=0 is actually the main season.
             // Skip it so we can fall through to the Special-detection handler below.
+            // Also skip if the matched season is clearly the main one (many episodes)
+            // and there's another season that looks like a special (keyword OR single episode).
+            bool hasSpecialElsewhere = preferredSeasons.Any(s =>
+                s.Id != matchedSeason.Id
+                && (HasSpecialKeyword(s.Title) || s.NumberOfEpisodes == 1));
+
             bool shouldSkipForSpecials = jellyfinSeasonNumber == 0
                 && !isSpecialMatch
-                && preferredSeasons.Any(s =>
-                    s.Id != matchedSeason.Id
-                    && (s.Title?.Contains("Special", StringComparison.OrdinalIgnoreCase) == true
-                        || s.Title?.Contains("OVA", StringComparison.OrdinalIgnoreCase) == true
-                        || s.Title?.Contains("OAD", StringComparison.OrdinalIgnoreCase) == true
-                        || s.Title?.Contains("Movie", StringComparison.OrdinalIgnoreCase) == true));
+                && hasSpecialElsewhere;
 
             if (!shouldSkipForMainSeason && !shouldSkipForSpecials)
             {
@@ -294,17 +293,65 @@ public class CrunchyrollSeasonProvider : IRemoteMetadataProvider<Season, SeasonI
         // For Season 0 (Specials), check for OADs, OVAs, Specials, Movies
         if (jellyfinSeasonNumber == 0)
         {
+            // Step 1: keyword match (title contains obvious special/movie keywords)
             matchedSeason = preferredSeasons.FirstOrDefault(s =>
-                s.Title?.Contains("OAD", StringComparison.OrdinalIgnoreCase) == true ||
-                s.Title?.Contains("OVA", StringComparison.OrdinalIgnoreCase) == true ||
-                s.Title?.Contains("Special", StringComparison.OrdinalIgnoreCase) == true ||
-                s.Title?.Contains("Movie", StringComparison.OrdinalIgnoreCase) == true ||
-                s.Title?.Contains("Extra", StringComparison.OrdinalIgnoreCase) == true);
+                HasSpecialKeyword(s.Title));
 
-            return matchedSeason;
+            if (matchedSeason != null)
+            {
+                return matchedSeason;
+            }
+
+            // Step 2: heuristic — find a "standalone film" season without keywords
+            // Example: "Fate/Grand Order Final Singularity Grand Temple of Time: Solomon"
+            //   has SeqNum=2, NumberOfEpisodes=1, no keywords, but is clearly a film.
+            // Logic: if there are multiple seasons, and one has only 1 episode while
+            //   others have significantly more (≥4), it's very likely a film/special.
+            if (preferredSeasons.Count >= 2)
+            {
+                var singleEpSeasons = preferredSeasons
+                    .Where(s => s.NumberOfEpisodes == 1)
+                    .ToList();
+
+                var multiEpSeasons = preferredSeasons
+                    .Where(s => s.NumberOfEpisodes >= 4)
+                    .ToList();
+
+                if (singleEpSeasons.Count > 0 && multiEpSeasons.Count > 0)
+                {
+                    // Pick the single-ep season with the highest SeasonSequenceNumber
+                    // (films are usually listed after the main seasons)
+                    matchedSeason = singleEpSeasons
+                        .OrderByDescending(s => s.SeasonSequenceNumber)
+                        .First();
+
+                    _logger.LogDebug(
+                        "S0 heuristic: matched single-episode season '{Title}' (SeqNum={SeqNum}, 1 ep) as Special/Film " +
+                        "(series has {MultiCount} season(s) with ≥4 episodes)",
+                        matchedSeason.Title, matchedSeason.SeasonSequenceNumber, multiEpSeasons.Count);
+
+                    return matchedSeason;
+                }
+            }
+
+            return null;
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Checks if a season title contains keywords indicating a special, OVA, OAD, movie, or extra.
+    /// </summary>
+    private static bool HasSpecialKeyword(string? title)
+    {
+        if (string.IsNullOrEmpty(title))
+        {
+            return false;
+        }
+
+        var keywords = new[] { "Special", "OVA", "OAD", "Movie", "Film", "Filme", "Extra", "\u5287\u5834\u7248" /* 劇場版 */ };
+        return keywords.Any(k => title.Contains(k, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>

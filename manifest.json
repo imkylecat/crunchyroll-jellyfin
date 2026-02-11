@@ -8,6 +8,13 @@
     "category": "Metadata Provider",
     "versions": [
       {
+        "version": "2.2.0.3",
+        "changelog": "Improved Season 0 (Specials) detection. Films listed as extra seasons without obvious keywords (e.g. Fate/Grand Order Solomon inside Babylonia) are now detected via single-episode heuristic. Extracted HasSpecialKeyword helper for consistent keyword matching across Season Provider.",
+        "checksum": "",
+        "timestamp": "2026-02-11T20:00:00Z",
+        "sourceUrl": "https://github.com/ocnaibill/crunchyroll-jellyfin/releases/download/v2.2.0.3/Jellyfin.Plugin.Crunchyroll.zip"
+      },
+      {
         "version": "2.2.0.2",
         "changelog": "Fix series matching score bug (PR #8 by @Gishky). CalculateMatchScore had a sequential mutation bug where searchWords was filtered before being used to filter candidateWords, causing inflated scores and incorrect series matches.",
         "checksum": "d1d0fe34b0469863be7db47f11f230be",
